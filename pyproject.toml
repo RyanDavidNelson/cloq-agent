@@ -1,0 +1,37 @@
+[project]
+name = "cloq-agent"
+version = "0.1.0"
+description = "Agentic synthesis of Cloq timing proofs over Picinae-lifted binaries, validated on FPGA."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.40",        # OpenAI-compatible client; works with vLLM and Ollama
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+    "pytanque",            # petanque client; see [tool.uv.sources]
+    "rich>=13.0",          # readable CLI/eval output
+]
+
+[project.optional-dependencies]
+rag = ["sentence-transformers>=3.0"]     # local embeddings (else falls back to /v1/embeddings)
+mine = ["coqpyt"]                        # richer corpus extraction (else regex fallback)
+fpga = ["pynq>=3.0"]                     # runs on the AUP-ZU3 PS, not the dev workstation
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[project.scripts]
+cloq-agent = "cloq_agent.cli:main"
+
+[tool.uv.sources]
+pytanque = { git = "https://github.com/llm4rocq/pytanque.git" }
+coqpyt   = { git = "https://github.com/sr-lab/coqpyt.git" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cloq_agent"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

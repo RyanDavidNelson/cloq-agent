@@ -1,0 +1,55 @@
+# Starter targets. Gold data (cycle counts, expert times) are from the Cloq paper
+# (Averill, "Formally-Verified, Tight Timing Constraints for Machine Code", PLDI SRC '25).
+# `gold_invariant` points at a checked-in invariant set (smoke target); for the rest the
+# agent synthesizes one and the proof/FPGA decide correctness.
+
+addloop:
+  kind: wcet                 # wcet | constant_time
+  description: "Peano addition loop; one loop, one invariant. Pipeline smoke test."
+  requires: ["Picinae_riscv", "TimingAutomation", "Addloop"]
+  lifted_program: addloop
+  entry_addr: 0x0
+  exit_point: addloop_exit
+  theorem_name: addloop_timing
+  params: [["x", "N"], ["y", "N"]]
+  objdump: targets/addloop.objdump
+  gold_invariant: ../proofs/targets/Addloop.v   # extracted timing_invs reused as gold
+  gold_cycles: null
+
+ct_swap:
+  kind: constant_time
+  description: "OpenSSL conditional constant-time swap. ~50 lines Rocq, 20 expert-min."
+  requires: ["Picinae_riscv", "TimingAutomation", "CtSwap"]
+  lifted_program: ct_swap
+  entry_addr: 0x0
+  exit_point: ct_swap_exit
+  theorem_name: ct_swap_ct
+  params: [["cond", "N"], ["a", "addr"], ["b", "addr"]]
+  secret_param: cond          # timing must NOT depend on this
+  objdump: targets/ct_swap.objdump
+  gold_cycles: null           # measured on NEORV32; constant across `cond`
+
+chacha20_block:
+  kind: constant_time
+  description: "ChaCha20 block function. ~80 lines Rocq, 2 expert-hr. Primary crypto demo."
+  requires: ["Picinae_riscv", "TimingAutomation", "ChaCha20"]
+  lifted_program: chacha20_block
+  entry_addr: 0x0
+  exit_point: chacha20_exit
+  theorem_name: chacha20_block_ct
+  params: [["key", "addr"], ["nonce", "addr"], ["ctr", "N"]]
+  secret_param: key
+  objdump: targets/chacha20_block.objdump
+  gold_cycles: 13624          # measured NEORV32 cycle count (predicted 12375-14849)
+
+vlist_insert_end:
+  kind: wcet
+  description: "FreeRTOS vListInsertEnd. Part of the list.c easy set (~1 expert-hr total)."
+  requires: ["Picinae_riscv", "TimingAutomation", "FreeRTOS_list"]
+  lifted_program: vListInsertEnd
+  entry_addr: 0x0
+  exit_point: vListInsertEnd_exit
+  theorem_name: vListInsertEnd_timing
+  params: []
+  objdump: targets/vlist_insert_end.objdump
+  gold_cycles: 54             # measured (expected 43-64)

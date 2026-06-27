@@ -1,0 +1,28 @@
+# Brings up the proof engine (rocq+petanque) and the agent. The model server runs on the host
+# (Ollama on the 5090) and is reached via host.docker.internal, so the GPU stays on the host.
+services:
+  rocq:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.rocq
+    ports:
+      - "8765:8765"          # petanque
+    volumes:
+      - ../proofs:/work/proofs
+      - ../vendor:/work/vendor
+
+  agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agent
+    depends_on:
+      - rocq
+    environment:
+      CLOQ_PETANQUE_HOST: rocq
+      CLOQ_MODEL_BASE_URL: http://host.docker.internal:11434/v1
+    volumes:
+      - ..:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # keep it interactive: `docker compose run --rm agent prove addloop`
+    command: ["--help"]

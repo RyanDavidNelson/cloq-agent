@@ -1,0 +1,63 @@
+"""LLM access via OpenAI-compatible endpoints (works with vLLM and Ollama alike).
+
+We do not wrap a bespoke client: the `openai` SDK speaks to any /v1 server, so a local
+Qwen-Coder on the 5090 and an optional cloud frontier model share one code path. The only
+policy here is *escalation*: hard goals that burn the local budget get one shot at a stronger
+model, mirroring the cost-minimizing hybrid pattern.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from openai import OpenAI
+
+from .config import ModelCfg
+
+
+@dataclass
+class Completion:
+    text: str
+    model: str
+    escalated: bool
+
+
+class LLM:
+    def __init__(self, cfg: ModelCfg):
+        self.cfg = cfg
+        self._primary = OpenAI(base_url=cfg.base_url, api_key=cfg.api_key)
+        self._escalation = (
+            OpenAI(base_url=cfg.escalation.base_url, api_key=cfg.escalation.api_key or "x")
+            if cfg.escalation.enabled
+            else None
+        )
+
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        escalate: bool = False,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> Completion:
+        use_esc = escalate and self._escalation is not None
+        client = self._escalation if use_esc else self._primary
+        model = self.cfg.escalation.name if use_esc else self.cfg.name
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=self.cfg.temperature if temperature is None else temperature,
+            max_tokens=self.cfg.max_tokens if max_tokens is None else max_tokens,
+        )
+        return Completion(
+            text=resp.choices[0].message.content or "",
+            model=model,
+            escalated=use_esc,
+        )
+
+    @property
+    def can_escalate(self) -> bool:
+        return self._escalation is not None

@@ -1,0 +1,27 @@
+# Rocq + coq-lsp + petanque + CoqHammer + Tactician, with Picinae/Cloq prebuilt.
+# Base on the community Coq image; pin a version that matches your coq-lsp release.
+FROM coqorg/coq:8.20
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential git rlwrap z3 \
+    && rm -rf /var/lib/apt/lists/*
+USER coq
+
+# coq-lsp ships petanque (pet-server). Tactician + CoqHammer are the automation net.
+RUN opam update && opam install -y \
+        coq-lsp \
+        coq-hammer coq-hammer-tactics \
+        coq-tactician \
+    && opam clean -a -c
+
+# Build the vendored Picinae/Cloq (mounted at build time or via submodule copy).
+WORKDIR /work
+COPY --chown=coq:coq vendor/picinae /work/vendor/picinae
+RUN eval $(opam env) && \
+    if [ -f /work/vendor/picinae/Makefile ]; then make -C /work/vendor/picinae || true; fi
+
+COPY --chown=coq:coq proofs /work/proofs
+EXPOSE 8765
+# Launch petanque so pytanque can connect from the agent container.
+CMD ["bash", "-lc", "eval $(opam env) && pet-server --address 0.0.0.0 --port 8765"]

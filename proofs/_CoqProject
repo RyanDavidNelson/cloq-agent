@@ -1,0 +1,9 @@
+# Rocq project file for cloq-agent proof targets.
+# Adjust the -Q/-R paths to match your vendored Picinae/Cloq layout.
+
+-R ../vendor/picinae         Picinae
+-R ../vendor/picinae/timing  Cloq
+-R targets                   CloqTargets
+-R lib                       CloqLib
+
+-arg -w -arg -notation-overridden

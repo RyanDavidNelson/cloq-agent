@@ -1,0 +1,44 @@
+# cloq-agent configuration. Override any key via --config or env CLOQ_*.
+
+petanque:
+  host: 127.0.0.1
+  port: 8765
+  # absolute path to the Rocq project root petanque should set as workspace
+  workspace: ./proofs
+  timeout_s: 120          # per-tactic wall clock before interrupt
+
+model:
+  # OpenAI-compatible endpoint. Ollama: http://localhost:11434/v1 ; vLLM: http://localhost:8000/v1
+  base_url: http://localhost:11434/v1
+  api_key: "ollama"       # any non-empty string for local servers
+  name: qwen3-coder:30b   # workhorse that fits a 32GB RTX 5090
+  temperature: 0.2
+  max_tokens: 1024
+  # optional escalation for budget-exceeded hard goals (set to null to disable)
+  escalation:
+    base_url: null
+    api_key: null
+    name: null
+
+rag:
+  store_dir: ./rag_store
+  embedder: local           # local | endpoint | hash
+  embed_model: BAAI/bge-small-en-v1.5    # used when embedder=local
+  embed_endpoint: http://localhost:11434/v1   # used when embedder=endpoint
+  embed_dim: 384
+  top_k_lemmas: 8
+  top_k_proofs: 4
+
+agent:
+  max_iterations: 24        # LLM tactic-repair steps per proof before giving up
+  invariant_attempts: 4     # distinct invariant-set proposals to try
+  hammer_first: true        # always try the cheap automation ladder before any LLM call
+  escalate_after: 16        # switch to escalation model after this many failed iterations
+
+fpga:
+  predicted_tolerance_cycles: 0   # exact model => 0; loosen only with justification
+  dudect_trials: 2000
+
+eval:
+  targets_file: ./eval/targets.yaml
+  out_dir: ./runs

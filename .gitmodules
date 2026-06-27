@@ -1,4 +1,4 @@
 [submodule "vendor/picinae"]
 	path = vendor/picinae
-	url = https://github.com/CharlesAverill/Picinae.git
-	branch = timing
+	url = https://github.com/your-org/picinae.git
+	branch = main
