@@ -14,4 +14,4 @@ References:
 - C. Averill, "Formally-Verified, Tight Timing Constraints for Machine Code," PLDI SRC '25.
 - Picinae: Platform In Coq for INstruction Analysis of Executables, K. W. Hamlen et al.
 
-All files outside `vendor/` are Copyright (c) 2026 Ryan <surname>, MIT License (see LICENSE).
+All files outside `vendor/` are Copyright (c) 2026 Ryan Nelson, MIT License (see LICENSE).
