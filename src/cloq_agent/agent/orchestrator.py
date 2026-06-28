@@ -176,8 +176,11 @@ class Orchestrator:
                                "structured", time.time() - t0,
                                proof_script=list(structured.tactic and [structured.tactic] or []))
 
-        # iterative repair
-        cur = driver._result(state, ok=True, error=None)  # refresh goals
+        # iterative repair — resume from the structured driver's furthest-progress state (the
+        # residual cycle goals), not the raw `satisfies_all`, so repair and the fed-back error
+        # target the actual stuck obligation.
+        resume = structured.state if structured.residual else state
+        cur = driver._result(resume, ok=True, error=None)  # refresh goals
         for it in range(1, self.cfg.agent.max_iterations + 1):
             if cur.finished:
                 return ProofResult(spec.name, True, attempt, it, llm_calls, escalated,
@@ -209,9 +212,12 @@ class Orchestrator:
             if not progressed:
                 break
 
+        # Surface the residual obligation (the unproven goal) as the error, so the orchestrator
+        # feeds it into the next synthesis attempt instead of a generic "budget exhausted" string.
+        residual = cur.goals or structured.residual
         return ProofResult(spec.name, False, attempt, self.cfg.agent.max_iterations,
                            llm_calls, escalated, None, time.time() - t0,
-                           proof_script=script, error="repair budget exhausted")
+                           proof_script=script, error=_unproved_goal_msg(residual))
 
 
 def _inv_name(invariant_src: str) -> str:
@@ -219,3 +225,17 @@ def _inv_name(invariant_src: str) -> str:
 
     m = re.search(r"Definition\s+(\w+)", invariant_src)
     return m.group(1) if m else "timing_invs"
+
+
+def _unproved_goal_msg(goals) -> str:
+    """Format the residual proof obligation for verifier-guided refinement: the goal the proof
+    couldn't close (typically the `cycle = ...` equation), which the next synthesis attempt uses to
+    correct the invariant. This is the verifier's goal state, not the spec's answer."""
+    if not goals:
+        return "repair budget exhausted (no residual goal captured)"
+    g = goals[0]
+    concl = (g.conclusion or g.pretty or "").strip()
+    return (
+        "the proof could not close this remaining goal — your invariant's timing/registers are "
+        f"likely off here:\n{concl[:500]}"
+    )

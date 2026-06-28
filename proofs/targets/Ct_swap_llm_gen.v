@@ -27,8 +27,8 @@ match t with (Addr a, s) :: t' => match a with
 | 0x1e4 => Some (s R_A2 = base_addr_b /\ s R_A3 = len /\
         4 * len < 2^32 /\
         cycle_count_of_trace t' = 0)
-| 0x1f0 => Some (s R_A2 <= s R_A3 /\
-        cycle_count_of_trace t' = tslli 2 + tsub + tadd + (s R_A3 - s R_A2) * (tfbne + tlw + tlw + taddi + taddi + txor + tand + txor + tsw + tlw + txor + tsw + tjal))
+| 0x1f0 => Some (s R_A5 <= len /\
+        cycle_count_of_trace t' = tslli 2 + tsub + tadd + (s R_A5) * (tfbne + tlw + tlw + taddi + taddi + txor + tand + txor + tsw + tlw + txor + tsw + tjal))
 | 0x1f4 => Some (cycle_count_of_trace t' = tslli 2 + tsub + tadd + len * (ttbne + tlw + tlw + taddi + taddi + txor + tand + txor + tsw + tlw + txor + tsw + tjal) + tfbne + tjalr)
 | _ => None
 end | _ => None end.

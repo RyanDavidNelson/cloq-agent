@@ -7,7 +7,7 @@ The ladder here closes residual *leaf* goals only.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .petanque_driver import PetanqueDriver, StepResult
 
@@ -26,6 +26,10 @@ class HammerOutcome:
     closed: bool
     tactic: str | None
     state: object | None
+    # Open goals when the script stalled (closed=False). Carries the residual proof obligation
+    # (e.g. the unproven `cycle = ...` equation) so the orchestrator can resume repair there and
+    # feed the mismatch back into the next synthesis attempt (verifier-guided refinement).
+    residual: list = field(default_factory=list)
 
 
 # The generic Cloq timing-proof skeleton. A timing proof's structure is isomorphic to the CFG and
@@ -69,11 +73,16 @@ def try_structured(
     by reusing that target's script — proof-skill transfer, with no LLM tokens. Scripts that don't
     fit the goal fail fast in `run_script` and are skipped, so trying the whole library is safe.
     """
+    best: HammerOutcome | None = None
     for script in [*STRUCTURED_SCRIPTS, *(extra_scripts or [])]:
         outcome = run_script(driver, start_state, script)
         if outcome.closed:
             return outcome
-    return HammerOutcome(closed=False, tactic=None, state=start_state)
+        # Keep the candidate that progressed furthest (fewest residual goals) so the orchestrator
+        # can resume repair from there and report the actual stuck obligation.
+        if best is None or len(outcome.residual) < len(best.residual):
+            best = outcome
+    return best or HammerOutcome(closed=False, tactic=None, state=start_state)
 
 
 def try_ladder(
@@ -97,8 +106,10 @@ def run_script(driver: PetanqueDriver, state: object, script: list[str]) -> Hamm
     for tac in script:
         res = driver.run(cur.state, tac)
         if not res.ok:
-            return HammerOutcome(closed=False, tactic=tac, state=cur.state)
+            # Stalled: hand back the pre-failure state and its open goals (the residual obligation).
+            return HammerOutcome(closed=False, tactic=tac, state=cur.state, residual=cur.goals)
         last, cur = tac, res
         if res.finished:
             return HammerOutcome(closed=True, tactic=last, state=res.state)
-    return HammerOutcome(closed=bool(cur.finished), tactic=last, state=cur.state)
+    return HammerOutcome(closed=bool(cur.finished), tactic=last, state=cur.state,
+                         residual=[] if cur.finished else cur.goals)

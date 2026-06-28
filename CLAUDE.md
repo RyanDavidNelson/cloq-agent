@@ -148,9 +148,21 @@ vendor/picinae/          Picinæ + Cloq. READ-ONLY. Never edit; check its licens
     `rewrite N_sub_distr; lia`. A purely generic existential-loop *structured candidate* was tried
     but `handle_ex`'s `eexists` metavariable can't be instantiated by `lia`/`hammer` on the
     nonlinear `?i * body`, so the reliable path is the LLM repair supplying the explicit witness.
-- **Remaining loop gaps:** `ct_swap_llm` / `find_in_array_llm` still need an *exact* loop arm to
-  either prove directly or match a library script. `uxListRemove_llm`'s `0x80002460` join needs the
-  noverlaps branch proof.
+- **Verifier-guided refinement.** `_discharge` now resumes repair from the structured driver's
+  furthest-progress state (the residual cycle goals via `HammerOutcome.residual` /
+  `run_script`), and feeds the *unproven goal* (the `cycle = …` mismatch — verifier output, NOT the
+  spec answer, so it's sound and generalizes) back into the next synthesis attempt (`last_error` →
+  `synthesize(feedback=…)`). Overfit: no soundness risk (petanque is ground truth, postcondition
+  pinned); the measurement caveat is that `loop_easy` targets are twins of golds, so its number is
+  an in-distribution dev metric — keep a cold held-out target for a generalization read.
+- **Remaining loop gaps are STRUCTURAL, not precision** (verifier feedback fixed the precision part):
+  - `find_in_array_llm`: the CFG cuts a join arm at `0x204` that gold deliberately doesn't (it
+    folds both branches into the `0x208` postcondition disjunction), so the skeleton can't match
+    find_in_array's gold script; and the proof needs the program-specific `key_in_array_dec` case
+    split no generic driver does. (CFG join detection helps uxListRemove but over-cuts here.)
+  - `ct_swap_llm`: gold's loop arm is `exists index, …`; the model proposes a pointer-difference
+    `(s R_A3 - s R_A2)` index, which neither proves directly nor matches ct_swap's gold script.
+  - `uxListRemove_llm`'s `0x80002460` join needs the noverlaps branch proof.
 - `vListInsert` (the cyclic-list search loop, ~15 expert-hours) — the loop stretch target.
 
 ## Gotchas / key facts (still true)

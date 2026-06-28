@@ -25,13 +25,13 @@ Module find_in_array_timing_gen_Proof (cpu : RVCPUTimingBehavior).
 
 Definition timing_invs (base_mem : memory) (arr : N) (key : N) (len : N) (t:trace) :=
 match t with (Addr a, s) :: t' => match a with
-| 0x1e4 => Some (s V_MEM32 = base_mem /\ s R_A0 = arr /\ s R_A1 = key /\
+| 0x1e4 => Some (s V_MEM32 = base_mem /\ s R_A0 = arr /\ s R_A1 = key /\ 
             s R_A2 = len /\ 4 * len <= 2^32 - 1 /\
             cycle_count_of_trace t' = 0)
 | 0x1e8 => Some (s R_A5 <= len /\
-        cycle_count_of_trace t' = tfbgeu + taddi + (s R_A5) * (tfbeq + tlw + taddi + ttbeq))
-| 0x204 => Some (s R_A5 <= len /\ s R_A0 = s R_A5 /\
-        cycle_count_of_trace t' = tfbgeu + taddi + (s R_A5) * (tfbeq + tlw + taddi + ttbeq))
+        cycle_count_of_trace t' = tfbgeu + taddi + (s R_A5) * (taddi + tlw + taddi + ttbeq))
+| 0x204 => Some (s R_A5 <= len /\
+        cycle_count_of_trace t' = tfbgeu + taddi + (s R_A5) * (taddi + tlw + taddi + ttbeq))
 | 0x208 => Some (timing_postcondition base_mem arr key len t)
 | _ => None
 end | _ => None end.
