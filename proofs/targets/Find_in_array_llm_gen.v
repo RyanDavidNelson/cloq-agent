@@ -30,10 +30,11 @@ match t with (Addr a, s) :: t' => match a with
             cycle_count_of_trace t' = 0)
 | 0x1e8 => Some (s V_MEM32 = base_mem /\ s R_A0 = arr /\ s R_A1 = key /\ 
             s R_A2 = len /\ s R_A5 = 0 /\
-            cycle_count_of_trace t' = (len - s R_A5) * (taddi + tlw + tbeq + tjal + taddi) + taddi + tlw + tbeq + tjal)
+            s R_A5 <= len /\
+            cycle_count_of_trace t' = tfbgeu + taddi + (s R_A5) * (tslli 2 + tlw + taddi + ttbeq))
 | 0x204 => Some (s V_MEM32 = base_mem /\ s R_A0 = arr /\ s R_A1 = key /\ 
-            s R_A2 = len /\ s R_A5 = len /\
-            cycle_count_of_trace t' = (len - s R_A5) * (taddi + tlw + tbeq + tjal + taddi) + taddi + tlw + tbeq + tjal)
+            s R_A2 = len /\
+            cycle_count_of_trace t' = tfbgeu + taddi + (s R_A5) * (tslli 2 + tlw + taddi + ttbeq))
 | 0x208 => Some (timing_postcondition base_mem arr key len t)
 | _ => None
 end | _ => None end.

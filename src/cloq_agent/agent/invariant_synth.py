@@ -52,9 +52,20 @@ SYSTEM_SKELETON = """You are an expert in the Cloq timing-verification framework
 You are given a timing-invariant skeleton whose match structure, invariant-point addresses, and
 postcondition arm are FIXED. Your only job is to replace each `(* HOLE:0xADDR ... *) FILL_ME`
 placeholder with a Coq proposition:
-- for a loop header: the registers/bounds that hold there plus a closed form
-  `cycle_count_of_trace t' = (c0 - c) * t_body (+ constants)`;
-- for the entry: the precondition (register ties plus `cycle_count_of_trace t' = 0`).
+- for a loop header: the closed form for the cycles SO FAR, linear in the loop counter — the
+  register the loop body increments. It is `cycle_count_of_trace t' = pre + (counter_reg) * t_body`
+  where `t_body` is the SUM of the per-instruction times of ONE loop-body iteration and `pre` is
+  the straight-line time before the loop. Use `(s R_Ai)` for the counter (e.g. `s R_A5`), and
+  carry any register/bound facts the body needs (e.g. the counter <= length, memory preserved).
+- for the entry: the precondition — almost always exactly `cycle_count_of_trace t' = 0` (add a
+  register tie only if a later arm needs it and it is given as an entry hypothesis).
+Timing-constant rules (CRITICAL — wrong constants make the proof fail):
+- Use ONLY the per-instruction constants matching the CFG's instructions: tlw (lw), tsw (sw),
+  taddi (addi), tadd (add), tsub (sub), tslli (slli, written `tslli 2`), txor (xor), tand (and),
+  tor (or), tjal (jal), tjalr (jalr).
+- For a CONDITIONAL BRANCH there are TWO constants: taken `tt<op>` and fall-through `tf<op>`
+  (e.g. ttbeq/tfbeq, ttbne/tfbne, ttbgeu/tfbgeu). NEVER invent a single `tbeq`/`tbne`/`tbgeu`.
+- The loop body's branch is the fall-through case (the loop kept going), so use the `tf<op>` form.
 Hard constraints:
 - Reproduce EVERY `| 0xADDR => ...` arm with its address unchanged.
 - Do NOT add, remove, or renumber any address.

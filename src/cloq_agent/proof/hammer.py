@@ -57,11 +57,19 @@ STRUCTURED_SCRIPTS: list[list[str]] = [
 ]
 
 
-def try_structured(driver: PetanqueDriver, start_state: object) -> HammerOutcome:
-    """Try the generic structured Cloq proof from the fresh start state. Returns closed=True iff a
-    candidate finishes the whole `satisfies_all` goal. Petanque states are immutable, so each
-    candidate is run from the same `start_state`."""
-    for script in STRUCTURED_SCRIPTS:
+def try_structured(
+    driver: PetanqueDriver, start_state: object, extra_scripts: list[list[str]] | None = None,
+) -> HammerOutcome:
+    """Try the generic structured Cloq proof, then any reusable proof scripts from the skill
+    library, from the fresh start state. Returns closed=True iff a candidate finishes the whole
+    `satisfies_all` goal. Petanque states are immutable, so each candidate runs from `start_state`.
+
+    `extra_scripts` are previously-proven proof scripts (the gold proofs collected from solved
+    targets): a synthesized invariant whose arm structure matches a solved target's is discharged
+    by reusing that target's script — proof-skill transfer, with no LLM tokens. Scripts that don't
+    fit the goal fail fast in `run_script` and are skipped, so trying the whole library is safe.
+    """
+    for script in [*STRUCTURED_SCRIPTS, *(extra_scripts or [])]:
         outcome = run_script(driver, start_state, script)
         if outcome.closed:
             return outcome

@@ -25,6 +25,21 @@ def load_groups(path: str | Path) -> dict[str, list[str]]:
     return raw.get("groups", {}) or {}
 
 
+def load_proof_library(path: str | Path, exclude: str | None = None) -> list[list[str]]:
+    """All `gold_proof` scripts in the registry — the reusable proof-skill library the discharge
+    step tries on a synthesized invariant (a twin whose arm structure matches a solved target is
+    closed by reusing that target's script). `exclude` drops a target by name (e.g. the current
+    one). De-duplicates identical scripts (the straight-line list targets share one)."""
+    out: list[list[str]] = []
+    for name, t in load_targets(path).items():
+        if name == exclude:
+            continue
+        gp = t.get("gold_proof")
+        if gp and gp not in out:
+            out.append(gp)
+    return out
+
+
 def resolve_selectors(path: str | Path, selectors: list[str] | None) -> list[str] | None:
     """Expand a mix of group names and target names into a flat target-name list.
 

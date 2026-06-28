@@ -38,7 +38,7 @@ def cmd_index(args) -> int:
 def cmd_prove(args) -> int:
     from .agent.orchestrator import Orchestrator
     from .proof.petanque_driver import driver as pet_driver
-    from eval.targets import load_targets, build_spec  # local helper, see eval/targets.py
+    from eval.targets import load_targets, build_spec, load_proof_library  # see eval/targets.py
 
     cfg = load_config(args.config)
     targets = load_targets(cfg.eval.targets_file)
@@ -65,11 +65,13 @@ def cmd_prove(args) -> int:
             console.print(f"[red]{e}[/red]")
             return 2
 
+    # Reusable proof-skill library (gold proofs from the other targets), tried during discharge.
+    proof_library = load_proof_library(cfg.eval.targets_file, exclude=args.target)
     orch = Orchestrator(cfg)
     with pet_driver(cfg.petanque) as d:
         res = orch.prove(d, spec, cfg_description=cfg_desc,
                          secret_param=secret, gold_invariant=gold, gold_proof=gold_proof,
-                         invariant_skeleton=skeleton)
+                         invariant_skeleton=skeleton, proof_library=proof_library)
     status = "[green]PROVED[/green]" if res.proved else "[red]FAILED[/red]"
     console.print(f"{status} {res.target}  iters={res.iterations} llm_calls={res.llm_calls} "
                   f"closing={res.closing_tactic} {res.wall_s:.1f}s")

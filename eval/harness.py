@@ -12,7 +12,7 @@ from cloq_agent.config import Config
 from cloq_agent.agent.orchestrator import Orchestrator, ProofResult
 from cloq_agent.proof.petanque_driver import driver as pet_driver
 
-from .targets import build_spec, load_targets
+from .targets import build_spec, load_targets, load_proof_library
 
 
 @dataclass
@@ -60,9 +60,10 @@ def run_eval(cfg: Config, repo_root: Path, only: list[str] | None = None) -> Eva
             if only and name not in only:
                 continue
             spec, cfg_desc, secret, gold, gold_proof, skeleton = build_spec(t, repo_root, name=name)
+            proof_library = load_proof_library(cfg.eval.targets_file, exclude=name)
             res = orch.prove(d, spec, cfg_description=cfg_desc,
                              secret_param=secret, gold_invariant=gold, gold_proof=gold_proof,
-                             invariant_skeleton=skeleton)
+                             invariant_skeleton=skeleton, proof_library=proof_library)
             report.results.append(res)
 
     report.save(cfg.eval.out_dir)

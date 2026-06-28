@@ -124,17 +124,22 @@ vendor/picinae/          Picinæ + Cloq. READ-ONLY. Never edit; check its licens
   `<name>_llm` synthesis twin). Each new vendored program needs its `.vo` built in
   `docker/Dockerfile.rocq` and an `-I` line in `proofs/_CoqProject` (see the ct_swap / FreeRTOS
   entries). Group `_llm` twins under `groups:` in targets.yaml for an eval slice.
-- **`eval loop_easy` (the nonlinear slice) = 0/3** — and the two failure modes are now *separated*,
-  which is the useful signal:
-  - **Proof automation gap.** `addloop_llm` synthesizes the *correct* loop invariant (matches the
-    gold arm verbatim — retrieval surfaces it) but never closes, because the generic
-    `try_structured` driver lacks the loop tactics the gold proof uses (`msub_nowrap`,
-    `destruct PRE`, `exists`/`handle_ex` witnesses). Fix: add loop-aware structured candidates
-    (or have tactic-repair learn them).
-  - **Invariant synthesis gap.** `find_in_array_llm` / `ct_swap_llm` propose malformed closed forms
-    (wrong loop counter, wrong body terms, undefined constants like `tbeq`). Fix: better
-    loop-arm prompting / few-shot from the gold loop invariants now in the corpus.
-- **Get `uxListRemove_llm` to green** — its `0x80002460` join arm needs the noverlaps branch proof.
+- **`eval loop_easy` (nonlinear slice) = 0/3 → 1/3.** Two improvements landed here:
+  - **#1 Proof-skill reuse.** `try_structured` now also tries a *library of proven gold proof
+    scripts* (collected from the registry via `load_proof_library`, passed through `prove` →
+    `_discharge`). A synthesized invariant whose arm structure matches a solved target is
+    discharged by reusing that target's script — no LLM tokens. This closes **`addloop_llm`**
+    (its synthesized invariant matches addloop's gold; `closing=structured`). Scripts that don't
+    fit fail fast in `run_script` and are skipped, so trying the whole library is safe. (A purely
+    generic loop tactic was attempted first but is brittle on the `msub_nowrap`/`N_sub_distr`
+    wrap algebra — script reuse is the robust path and is the project's intended skill-accumulation.)
+  - **#2 Loop-arm synthesis prompt.** `SYSTEM_SKELETON` now spells out the loop-arm closed form
+    (`pre + counter_reg * t_body`, fall-through branch constant) and the exact legal `t*` constant
+    names — branches have BOTH `tt<op>`/`tf<op>`, never a bare `tbeq` (the `find_in_array_llm`
+    failure mode). The entry-hole hint says the entry arm is normally just `cycle = 0`.
+- **Remaining loop gaps:** `ct_swap_llm` / `find_in_array_llm` still miss the closed-form loop arm
+  (harder loops; no matching library script). `uxListRemove_llm`'s `0x80002460` join needs the
+  noverlaps branch proof.
 - `vListInsert` (the cyclic-list search loop, ~15 expert-hours) — the loop stretch target.
 
 ## Gotchas / key facts (still true)

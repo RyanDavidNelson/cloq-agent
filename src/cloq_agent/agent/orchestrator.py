@@ -76,6 +76,7 @@ class Orchestrator:
         gold_invariant: str | None = None,
         gold_proof: list[str] | None = None,
         invariant_skeleton=None,
+        proof_library: list[list[str]] | None = None,
     ) -> ProofResult:
         t0 = time.time()
         llm_calls = 0
@@ -136,7 +137,8 @@ class Orchestrator:
                                    proof_script=list(gold_proof),
                                    error=f"gold proof failed at: {outcome.tactic}")
 
-            res = self._discharge(driver, start, spec, attempt, llm_calls, escalated, t0)
+            res = self._discharge(driver, start, spec, attempt, llm_calls, escalated, t0,
+                                  proof_library=proof_library)
             if res.proved:
                 if self.fpga_oracle is not None:
                     report = self.fpga_oracle(spec.name)
@@ -151,7 +153,8 @@ class Orchestrator:
                            llm_calls, escalated, None, time.time() - t0,
                            error="exhausted invariant attempts")
 
-    def _discharge(self, driver, start, spec, attempt, llm_calls, escalated, t0) -> ProofResult:
+    def _discharge(self, driver, start, spec, attempt, llm_calls, escalated, t0,
+                   proof_library=None) -> ProofResult:
         """Close residual goals with hammer-first, LLM-repair fallback under an iteration budget."""
         script: list[str] = []
         state = start.state
@@ -163,10 +166,11 @@ class Orchestrator:
             return ProofResult(spec.name, True, attempt, 0, llm_calls, escalated,
                                ladder.tactic, time.time() - t0, proof_script=script)
 
-        # Structured pass: the generic Cloq proof skeleton (prove_invs + step + hammer). With a
-        # correct invariant this closes straight-line / single-branch targets outright, before any
-        # LLM tactic repair. No llm_calls — it is fixed automation, not synthesis.
-        structured = try_structured(driver, state)
+        # Structured pass: the generic Cloq proof skeleton (prove_invs + step + hammer), then the
+        # reusable proof-script library (gold proofs from solved targets). With a correct invariant
+        # this closes straight-line / single-branch targets and any target whose arm structure
+        # matches a library script, before any LLM tactic repair. No llm_calls — fixed automation.
+        structured = try_structured(driver, state, extra_scripts=proof_library)
         if structured.closed:
             return ProofResult(spec.name, True, attempt, 0, llm_calls, escalated,
                                "structured", time.time() - t0,
