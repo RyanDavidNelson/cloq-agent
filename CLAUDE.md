@@ -137,8 +137,19 @@ vendor/picinae/          Picinæ + Cloq. READ-ONLY. Never edit; check its licens
     (`pre + counter_reg * t_body`, fall-through branch constant) and the exact legal `t*` constant
     names — branches have BOTH `tt<op>`/`tf<op>`, never a bare `tbeq` (the `find_in_array_llm`
     failure mode). The entry-hole hint says the entry arm is normally just `cycle = 0`.
-- **Remaining loop gaps:** `ct_swap_llm` / `find_in_array_llm` still miss the closed-form loop arm
-  (harder loops; no matching library script). `uxListRemove_llm`'s `0x80002460` join needs the
+- **Two synthesis levers (for the harder loops):**
+  - **(a) Few-shot loop-arm exemplars.** `SYSTEM_SKELETON` carries worked loop-header arms from
+    OTHER programs (a down-counter, a rising index with a "not-done-yet" fact, and an implicit
+    pointer counter introduced via `exists i, … s R_A2 = base ⊕ (4*i) …`). Teaches the closed-form
+    shape (and the existential-index form needed to match the gold structure for library reuse).
+  - **(b) Witness-aware repair.** `tactic_repair` now knows the Cloq loop idioms — `tstep r5_step`,
+    `hammer` (its old prompt wrongly said `whammer`, which doesn't exist), `exists (1 + i)` for a
+    loop-counter existential (don't leave it to `eauto`), `rewrite msub_nowrap by lia`,
+    `rewrite N_sub_distr; lia`. A purely generic existential-loop *structured candidate* was tried
+    but `handle_ex`'s `eexists` metavariable can't be instantiated by `lia`/`hammer` on the
+    nonlinear `?i * body`, so the reliable path is the LLM repair supplying the explicit witness.
+- **Remaining loop gaps:** `ct_swap_llm` / `find_in_array_llm` still need an *exact* loop arm to
+  either prove directly or match a library script. `uxListRemove_llm`'s `0x80002460` join needs the
   noverlaps branch proof.
 - `vListInsert` (the cyclic-list search loop, ~15 expert-hours) — the loop stretch target.
 

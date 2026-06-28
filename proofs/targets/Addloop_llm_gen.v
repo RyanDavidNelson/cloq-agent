@@ -26,7 +26,7 @@ Definition timing_invs (x : N) (y : N) (t:trace) :=
 match t with (Addr a, s) :: t' => match a with
 | 0x8 => Some (s R_T0 = x /\ s R_T1 = y /\
         cycle_count_of_trace t' = 0)
-| 0x10 => Some (s R_T2 = 1 /\ s R_T3 = 0 /\ 
+| 0x10 => Some (s R_T2 = 1 /\ s R_T3 = 0 /\
         s R_T0 <= x /\
         cycle_count_of_trace t' = 
             tori + tandi + (x - s R_T0) * (tfbeq + taddi + tsub + ttbeq))

@@ -66,6 +66,18 @@ Timing-constant rules (CRITICAL — wrong constants make the proof fail):
 - For a CONDITIONAL BRANCH there are TWO constants: taken `tt<op>` and fall-through `tf<op>`
   (e.g. ttbeq/tfbeq, ttbne/tfbne, ttbgeu/tfbgeu). NEVER invent a single `tbeq`/`tbne`/`tbgeu`.
 - The loop body's branch is the fall-through case (the loop kept going), so use the `tf<op>` form.
+Worked examples of loop-header arms (these are from OTHER programs — adapt the form to THIS one,
+do not copy the registers/constants):
+- counter that decreases from x (in R_T0) to 0:
+  Some (s R_T2 = 1 /\\ s R_T0 <= x /\\
+        cycle_count_of_trace t' = tori + tandi + (x - s R_T0) * (tfbeq + taddi + tsub + ttbeq))
+- index counter i (in some R_Ai) rising 0..len, carrying a "not done yet" fact:
+  Some (s R_A5 <= len /\\ (forall j, j < s R_A5 -> <fact about element j>) /\\
+        cycle_count_of_trace t' = <pre> + (s R_A5) * (<one fall-through iteration body>))
+- loop counter that exists only implicitly (a pointer p = base + 4*i): INTRODUCE the index with
+  an existential and tie the pointer to it:
+  Some (exists i, i <= len /\\ s R_A2 = base ⊕ (4 * i) /\\
+        cycle_count_of_trace t' = <pre> + i * (<one fall-through iteration body>))
 Hard constraints:
 - Reproduce EVERY `| 0xADDR => ...` arm with its address unchanged.
 - Do NOT add, remove, or renumber any address.
