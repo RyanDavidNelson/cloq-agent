@@ -24,16 +24,8 @@ Module ct_swap_timing_gen_Proof (cpu : RVCPUTimingBehavior).
 
 Definition timing_invs (len : N) (base_addr_b : N) (t:trace) :=
 match t with (Addr a, s) :: t' => match a with
-| 0x1e4 => Some ((4 * len < 2^32) /\
-        (exists k', base_addr_b = 4 * k') /\
-        (s R_A2 = base_addr_b) /\
-        (s R_A3 = len) /\
-        (cycle_count_of_trace t' = 0))
-| 0x1f0 => Some ((s R_A2 = base_addr_b) /\
-        (s R_A3 = len) /\
-        (s R_A0 = 0 - s R_A0) /\
-        (s R_A1 = s R_A2 + s R_A3) /\
-        (cycle_count_of_trace t' = (len - s R_A3) * (ttbne + tlw + tlw + taddi + taddi + txor + tand + txor + tsw + tlw + txor + tsw + tjal) + tslli 2 + tsub + tadd))
+| 0x1e4 => Some ((4 * len < 2^32) /\ (exists k', base_addr_b = 4 * k') /\ (s R_A3 = len) /\ (s R_A2 = base_addr_b) /\ (cycle_count_of_trace t' = 0))
+| 0x1f0 => Some ((4 * len < 2^32) /\ (exists k', base_addr_b = 4 * k') /\ (s R_A3 = len) /\ (s R_A2 = base_addr_b) /\ (s R_A0 = 0 - s R_A0) /\ (s R_A1 = s R_A2 + s R_A3) /\ (cycle_count_of_trace t' = (len - s R_A3) * (ttbne + tlw + tlw + taddi + taddi + txor + tand + txor + tsw + tlw + txor + tsw + tjal) + tfbne + tjalr))
 | 0x1f4 => Some (cycle_count_of_trace t' = tslli 2 + tsub + tadd + len * (ttbne + tlw + tlw + taddi + taddi + txor + tand + txor + tsw + tlw + txor + tsw + tjal) + tfbne + tjalr)
 | _ => None
 end | _ => None end.

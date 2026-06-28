@@ -1,0 +1,16 @@
+
+array.elf:     file format elf32-littleriscv
+
+Disassembly of section .text:
+
+000001e4 <find_in_array>:
+     1e4:	00000793          	addi	a5,zero,0
+     1e8:	00c7fe63          	bgeu	a5,a2,204 <find_in_array+0x20>
+     1ec:	00279293          	slli	t0,a5,0x2
+     1f0:	00550333          	add	t1,a0,t0
+     1f4:	00032383          	lw	t2,0(t1)
+     1f8:	00b38663          	beq	t2,a1,204 <find_in_array+0x20>
+     1fc:	00178793          	addi	a5,a5,1
+     200:	fe9ff06f          	jal	zero,1e8 <find_in_array+0x4>
+     204:	00078513          	addi	a0,a5,0
+     208:	00008067          	jalr	zero,0(ra)

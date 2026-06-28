@@ -303,6 +303,71 @@ uxListRemove_llm:
   objdump: targets/uxListRemove.objdump
   postcondition: "time_of_uxListRemove t base_mem a0"
 
+# ---------------------------------------------------------------------------
+# First NONLINEAR target: find_in_array — a linear-search loop (timing is a function of the
+# loop counter, not a constant), so the invariant carries a real loop-header arm
+# `cycle_count_of_trace t' = a5 * (loop body)` — the closed form is the model's actual job, unlike
+# the straight-line list functions. Reuses the vendored find_in_array_proof.v functor (over the
+# `array` lifted program, already built). The vendored invariant declares a vestigial leading
+# `(s : store)` param (immediately shadowed by the match), so the gold target passes the store via
+# `inv_args` while binding only the real params.
+# ---------------------------------------------------------------------------
+
+find_in_array:
+  kind: wcet
+  description: "Linear search over a uint32 array for a key; one loop, WCET ~ len. First nonlinear gold target."
+  requires: ["NEORV32", "array", "RISCVTiming", "find_in_array_proof"]
+  lifted_program: lifted_prog
+  entry_addr: 0x1e4
+  exit_point: exits
+  theorem_name: find_in_array_timing_gen
+  program_module: Program_find_in_array
+  auto_module: find_in_arrayAuto
+  # a0=arr, a1=key, a2=len, plus the stack pointer and base memory the vendored theorem binds.
+  params: [["base_mem", "memory"], ["sp", "N", "R_SP"], ["arr", "N", "R_A0"], ["key", "N", "R_A1"], ["len", "N", "R_A2"]]
+  # The vendored invariant takes the store `s` as a (shadowed) leading arg; pass it explicitly.
+  inv_args: ["s", "base_mem", "sp", "arr", "key", "len"]
+  entry_hyps:
+    - ["MEM", "s V_MEM32 = base_mem"]
+    - ["LEN_VALID", "4 * len <= 2^32 - 1"]
+  gold_invariant: ../vendor/picinae/timing/examples/data_structures/array/find_in_array/find_in_array_proof.v
+  gold_proof:
+    - "intros."
+    - "apply prove_invs."
+    - "simpl. rewrite ENTRY. unfold entry_addr. tstep r5_step. now repeat split."
+    - "intros."
+    - "eapply startof_prefix in ENTRY; try eassumption."
+    - "eapply preservation_exec_prog in MDL; try eassumption; [idtac|apply lift_riscv_welltyped]."
+    - "clear - ENTRY PRE MDL. rename t1 into t. rename s1 into s'."
+    - "destruct_inv 32 PRE."
+    - "destruct PRE as (Mem & A0 & A1 & A2 & LEN_VALID & Cycles). repeat (tstep r5_step). repeat eexists; auto. intros; now rewrite Mem. intros; lia. psimpl; lia. hammer."
+    - "destruct PRE as (A0 & A1 & A2 & LEN_VALID & Preserved & NotFound & A5_LEN & Cycles)."
+    - "destruct (key_in_array_dec (s' V_MEM32) arr key len) as [IN | NOT_IN]."
+    - "{ tstep r5_step. repeat (tstep r5_step). left. exists (s' R_A5). split. now apply N.ltb_lt. split. rewrite <- Preserved. now apply N.eqb_eq in BC0. now apply N.ltb_lt in BC. split. intros. rewrite <- Preserved by lia. now apply NotFound. unfold time_of_find_in_array. hammer. apply N.ltb_lt in BC. apply N.eqb_neq in BC0. repeat split; auto. intros. rewrite N.mod_small in H by lia. apply lt_impl_lt_or_eq in H. destruct H. now subst. now apply NotFound. rewrite N.mod_small by lia. lia. rewrite (N.mod_small (1 + s' R_A5)). hammer. apply N.le_lt_trans with len; lia. exfalso. destruct IN as (idx & IDX_LEN & IN). apply (NotFound idx). apply N.ltb_ge in BC. lia. assumption. }"
+    - "{ tstep r5_step. do 4 (tstep r5_step). exfalso. apply NOT_IN. exists (s' R_A5). split. now apply N.ltb_lt. apply N.eqb_eq in BC0. assumption. repeat (tstep r5_step). apply N.ltb_lt in BC. apply N.eqb_neq in BC0. repeat split; auto. intros. rewrite N.mod_small in H by lia. apply lt_impl_lt_or_eq in H. destruct H. now subst. now apply NotFound. rewrite N.mod_small by lia. lia. rewrite (N.mod_small (1 + s' R_A5)). hammer. apply N.le_lt_trans with len; lia. repeat (tstep r5_step). unfold time_of_find_in_array. right. split. intro. apply NOT_IN. destruct H as (idx & IDX_LEN & IN). exists idx. split. assumption. now rewrite Preserved. replace (s' R_A5) with len in * by (rewrite N.ltb_ge in BC; lia). hammer. }"
+  # WCET (key absent): taddi + len*(tfbgeu+tslli 2+tadd+tlw+tfbeq+taddi+tjal) + ttbgeu + taddi + tjalr
+  gold_cycles: null
+
+find_in_array_llm:
+  # Synthesis twin: skeleton mode pins the exit arm (timing_postcondition) and the addresses; the
+  # model must fill the LOOP-header arm (0x1e8) with the closed form a5 * (loop body) — the first
+  # genuinely nonlinear synthesis test. sp is dropped (the loop proof never uses it).
+  kind: wcet
+  description: "Synthesis twin of find_in_array (no gold hints) — nonlinear loop invariant test."
+  requires: ["NEORV32", "array", "RISCVTiming", "find_in_array_proof"]
+  lifted_program: lifted_prog
+  entry_addr: 0x1e4
+  exit_point: exits
+  theorem_name: find_in_array_timing_gen
+  program_module: Program_find_in_array
+  auto_module: find_in_arrayAuto
+  params: [["base_mem", "memory"], ["arr", "N", "R_A0"], ["key", "N", "R_A1"], ["len", "N", "R_A2"]]
+  entry_hyps:
+    - ["MEM", "s V_MEM32 = base_mem"]
+    - ["LEN_VALID", "4 * len <= 2^32 - 1"]
+  objdump: targets/find_in_array.objdump
+  postcondition: "timing_postcondition base_mem arr key len t"
+
 # Named eval groups (resolved by `cloq-agent eval <group>`); not targets themselves.
 groups:
   list_easy_four:
@@ -310,3 +375,8 @@ groups:
     - vListInitialiseItem_llm
     - vListInsertEnd_llm
     - uxListRemove_llm
+  # Nonlinear (loop) synthesis targets — the real test of closed-form loop-invariant synthesis.
+  loop_easy:
+    - addloop_llm
+    - ct_swap_llm
+    - find_in_array_llm

@@ -59,6 +59,11 @@ class TargetSpec:
     # pointer in a1 that its vendored invariant ignores). They constrain inputs only, so the
     # soundness boundary holds. inv_args stays driven solely by `params`.
     extra_binders: list[tuple[str, str, str]] = field(default_factory=list)
+    # Explicit argument list applied to the invariant in the goal `(inv_name <inv_args>)`. Defaults
+    # to the param names. Override when the (vendored) invariant takes an argument that is not a
+    # param binder — notably the universally-quantified store `s` as a leading arg (some vendored
+    # invariants declare a shadowed `(s : store)` first parameter), e.g. ["s", "arr", "key", "len"].
+    inv_args: list[str] | None = None
     # The pinned exit-arm proposition for skeleton synthesis (the trusted WCET/ct claim). The
     # model never supplies this; it is spliced in verbatim. None disables skeleton synthesis.
     postcondition: str | None = None
@@ -186,7 +191,7 @@ def render(
         lifted_prog=spec.lifted_program,
         exits=spec.exit_point,
         inv_name=invariant_name,
-        inv_args=_inv_args(spec.params),
+        inv_args=" ".join(spec.inv_args) if spec.inv_args else _inv_args(spec.params),
         proof_body=proof_body.strip(),
     )
 

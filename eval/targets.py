@@ -45,7 +45,7 @@ def resolve_selectors(path: str | Path, selectors: list[str] | None) -> list[str
 _OPTIONAL_SPEC_FIELDS = (
     "timing_functor", "timing_submodule", "program_module",
     "auto_module", "cpu_module", "cpu_config", "postcondition",
-    "entry_hyps", "extra_binders",
+    "entry_hyps", "extra_binders", "inv_args",
 )
 
 

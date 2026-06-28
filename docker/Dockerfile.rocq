@@ -30,6 +30,16 @@ RUN eval $(opam env) \
       -w -notation-overridden -w -deprecated-since-8.20 -w -overriding-logical-loadpath \
       riscv_addloop_timing_proof.v
 
+# find_in_array (first nonlinear / loop target). array.v (the lifted program) is already built
+# above; build its timing proof so `Require Import find_in_array_proof` resolves.
+RUN eval $(opam env) \
+ && cd /work/vendor/picinae/timing/examples/data_structures/array/find_in_array \
+ && coqc -R /work/vendor/picinae Picinae \
+      -I /work/vendor/picinae/timing/riscv \
+      -I /work/vendor/picinae/timing/examples/data_structures/array/find_in_array \
+      -w -notation-overridden -w -deprecated-since-8.20 -w -overriding-logical-loadpath \
+      find_in_array_proof.v || exit 1
+
 # The constant-time ct_swap example (Task A). Lifted program + helper lemma + proof, in
 # dependency order. Its functor (TimingProof) is what the agent's generated ct_swap theorem
 # instantiates, so these .vo must exist for `Require Import ct_swap_proof` to resolve.

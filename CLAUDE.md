@@ -111,14 +111,30 @@ vendor/picinae/          Picinæ + Cloq. READ-ONLY. Never edit; check its licens
 - `uxListRemove_llm` is still ❌: its `0x80002460` join arm needs the `noverlaps`/`getmem_noverlap`
   branch reasoning, which the generic structured driver doesn't do. Closing it needs either a
   noverlaps-aware structured candidate or LLM proof-repair that discovers the bespoke tactics.
+- **First NONLINEAR target: `find_in_array`** (a linear-search loop; WCET ~ len). The list "easy
+  four" are *linear* (constant cycle count), so the invariant is trivial and the LLM is barely
+  exercised; a loop forces a real `cycle_count_of_trace t' = a5 * (loop body)` closed-form arm —
+  the actual synthesis test. `prove find_in_array` closes via the gold path (`llm_calls=0`); its
+  `_llm` twin + `addloop_llm` + `ct_swap_llm` form the eval group **`loop_easy`** (the nonlinear
+  success-rate slice). `theorem_builder` gained `inv_args` (explicit invariant application list) so
+  the vendored invariant's vestigial leading `(s : store)` arg is passed without binding it.
 
 ## Next tasks
 - More constant-time / WCET targets following the two-phase pattern (gold baseline target, then a
   `<name>_llm` synthesis twin). Each new vendored program needs its `.vo` built in
   `docker/Dockerfile.rocq` and an `-I` line in `proofs/_CoqProject` (see the ct_swap / FreeRTOS
   entries). Group `_llm` twins under `groups:` in targets.yaml for an eval slice.
-- **Get `uxListRemove_llm` (and `ct_swap_llm`) to green** — the remaining synthesis gaps are the
-  branchy/loop invariant *bodies* and the non-generic proof tactics, not the scaffold.
+- **`eval loop_easy` (the nonlinear slice) = 0/3** — and the two failure modes are now *separated*,
+  which is the useful signal:
+  - **Proof automation gap.** `addloop_llm` synthesizes the *correct* loop invariant (matches the
+    gold arm verbatim — retrieval surfaces it) but never closes, because the generic
+    `try_structured` driver lacks the loop tactics the gold proof uses (`msub_nowrap`,
+    `destruct PRE`, `exists`/`handle_ex` witnesses). Fix: add loop-aware structured candidates
+    (or have tactic-repair learn them).
+  - **Invariant synthesis gap.** `find_in_array_llm` / `ct_swap_llm` propose malformed closed forms
+    (wrong loop counter, wrong body terms, undefined constants like `tbeq`). Fix: better
+    loop-arm prompting / few-shot from the gold loop invariants now in the corpus.
+- **Get `uxListRemove_llm` to green** — its `0x80002460` join arm needs the noverlaps branch proof.
 - `vListInsert` (the cyclic-list search loop, ~15 expert-hours) — the loop stretch target.
 
 ## Gotchas / key facts (still true)

@@ -139,6 +139,29 @@ def test_extra_binders_add_binder_and_reg_hyp_but_not_inv_arg():
     assert "vListInsertEnd_timing_invs base_mem a0 a1" not in src
 
 
+def test_inv_args_override_prepends_store_arg():
+    """A vendored invariant that takes the universally-quantified store `s` as a leading arg is
+    driven via inv_args, while binders/inv params exclude `s` (find_in_array's shape)."""
+    spec = TargetSpec(
+        name="find_in_array",
+        requires=["NEORV32", "array", "RISCVTiming", "find_in_array_proof"],
+        lifted_program="lifted_prog",
+        entry_addr=0x1e4,
+        exit_point="exits",
+        theorem_name="find_in_array_timing_gen",
+        params=[("base_mem", "memory"), ("arr", "N", "R_A0"), ("len", "N", "R_A2")],
+        program_module="Program_find_in_array",
+        auto_module="find_in_arrayAuto",
+        inv_args=["s", "base_mem", "arr", "len"],
+    )
+    src = render(spec, "Definition find_in_array_timing_invs (s : store) (base_mem : memory) (arr : N) (len : N) (t:trace) := True.",
+                 "find_in_array_timing_invs")
+    # The invariant is applied to the store `s` first, then the params.
+    assert "(find_in_array_timing_invs s base_mem arr len)" in src
+    # `s` is the template's forall-bound store, not an extra binder.
+    assert "(s : " not in src.split("Theorem")[1]  # no `(s : ...)` binder in the theorem head
+
+
 def test_no_entry_hyps_by_default():
     """A spec without entry_hyps emits only the register-tie hypotheses (addloop back-compat)."""
     src = render(SPEC, INV, "timing_invs")
