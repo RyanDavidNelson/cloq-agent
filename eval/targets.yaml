@@ -1,3 +1,21 @@
+# Target registry. Required fields per target: kind, requires, lifted_program, entry_addr,
+# exit_point, theorem_name, params. Optional gold_invariant / gold_proof short-circuit the LLM.
+#
+# Theorem-builder knobs (all OPTIONAL; omit to keep the addloop defaults shown):
+#   requires:         Coq modules emitted as `Require Import <m>.` (NArith / Picinae_riscv are
+#                     always prepended; `Import RISCVNotations.` always follows).
+#   lifted_program:   in-scope name of the lifted program in the goal   (default: lifted_prog)
+#   exit_point:       in-scope name of the exit predicate               (default: exits)
+#   theorem_name:     name of the generated Theorem.
+#   params:           binders for the invariant. Each is [name, type] or, to drive an entry
+#                     hypothesis, [name, type, reg] e.g. ["x", "N", "R_T0"] -> (T0: s R_T0 = x).
+#                     If no param carries a reg, the first two fall back to R_T0 / R_T1.
+#   timing_functor:   functor instantiated as `Module Inner := <f> cpu.`  (default: TimingProof)
+#   timing_submodule: imported as `Import Inner.<m>.`                    (default: RISCVTiming)
+#   program_module:   imported as `Import Inner.<m>.`                    (default: Program_addloop)
+#   auto_module:      imported as `Import Inner.<m>.`                    (default: addloopAuto)
+#   cpu_module / cpu_config: concrete CPU instantiation at file end (default: NEORV32 / NEORV32BaseConfig)
+
 addloop:
   kind: wcet
   description: "Peano addition loop; one loop, one invariant. Pipeline smoke test."
@@ -22,4 +40,24 @@ addloop:
     - "destruct PRE as [T0 [T2 Cycles]]. repeat (tstep r5_step). repeat split; try assumption. lia. hammer."
     - "destruct PRE as [T2 [T3 [T0 Cycles_t]]]. tstep r5_step. hammer."
     - "tstep r5_step. tstep r5_step. tstep r5_step. rewrite msub_nowrap by (psimpl; lia). repeat split. lia. hammer. rewrite N_sub_distr; lia."
+  gold_cycles: null
+
+addloop_llm:
+  # Synthesis-branch twin of addloop: same program, but no gold_invariant and no
+  # gold_proof, so the orchestrator must call invariant_synth.synthesize (llm_calls >= 1).
+  # objdump is kept so a real CFG description is built. Reusing the addloop program
+  # isolates "does synthesis produce a closable invariant" from theorem-builder
+  # generalization (task 2).
+  kind: wcet
+  description: "Peano addition loop; synthesis-branch twin of addloop (no gold hints)."
+  requires: ["NEORV32", "RISCVTiming", "riscv_addloop_timing_proof"]
+  lifted_program: lifted_prog
+  entry_addr: 0x8
+  exit_point: exits
+  theorem_name: addloop_timing_gen
+  params: [["x", "N"], ["y", "N"]]
+  objdump: targets/addloop.objdump
+  # Pinned exit-arm (WCET claim) for skeleton synthesis: only the loop/entry arms are holes for
+  # the model; this is spliced in verbatim. Matches the vendored addloop 0x20 arm.
+  postcondition: "cycle_count_of_trace t' = tori + tandi + x * (tfbeq + taddi + tsub + ttbeq) + ttbeq"
   gold_cycles: null

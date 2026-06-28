@@ -62,6 +62,9 @@ class AgentCfg:
     invariant_attempts: int = 4
     hammer_first: bool = True
     escalate_after: int = 16
+    # "skeleton": CFG emits the match scaffold + addresses, model fills only the loop/entry
+    # holes (postcondition pinned). "freeform": model emits the whole Definition. Kept for A/B.
+    synthesis_mode: str = "skeleton"
 
 
 @dataclass

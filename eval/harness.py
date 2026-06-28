@@ -59,9 +59,10 @@ def run_eval(cfg: Config, repo_root: Path, only: list[str] | None = None) -> Eva
         for name, t in targets.items():
             if only and name not in only:
                 continue
-            spec, cfg_desc, secret, gold = build_spec(t, repo_root)
+            spec, cfg_desc, secret, gold, gold_proof, skeleton = build_spec(t, repo_root, name=name)
             res = orch.prove(d, spec, cfg_description=cfg_desc,
-                             secret_param=secret, gold_invariant=gold)
+                             secret_param=secret, gold_invariant=gold, gold_proof=gold_proof,
+                             invariant_skeleton=skeleton)
             report.results.append(res)
 
     report.save(cfg.eval.out_dir)

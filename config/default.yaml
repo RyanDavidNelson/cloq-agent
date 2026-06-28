@@ -34,6 +34,9 @@ agent:
   invariant_attempts: 4     # distinct invariant-set proposals to try
   hammer_first: true        # always try the cheap automation ladder before any LLM call
   escalate_after: 16        # switch to escalation model after this many failed iterations
+  synthesis_mode: skeleton  # skeleton: CFG emits the match scaffold/addresses, model fills only
+                            # the loop/entry holes (postcondition pinned). freeform: model emits
+                            # the whole Definition. Override per-run with `prove --synthesis-mode`.
 
 fpga:
   predicted_tolerance_cycles: 0   # exact model => 0; loosen only with justification

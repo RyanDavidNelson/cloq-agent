@@ -1,7 +1,9 @@
-00000000 <add>:
-   0:	00028463          	beqz	t0,10 <end>
-   4:	00130313          	addi	t1,t1,1
-   8:	fff28293          	addi	t0,t0,-1
-   c:	ff5ff06f          	j	0 <add>
-00000010 <end>:
-  10:	00008067          	ret
+00000008 <add>:
+   8:	00106393          	ori	t2,zero,1
+   c:	000e7e13          	andi	t3,t3,0
+  10:	01c28863          	beq	t0,t3,20 <end>
+  14:	00130313          	addi	t1,t1,1
+  18:	407282b3          	sub	t0,t0,t2
+  1c:	ffce0ae3          	beq	t3,t3,10 <add>
+00000020 <end>:
+  20:	00008067          	ret

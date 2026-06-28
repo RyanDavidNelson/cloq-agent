@@ -61,3 +61,24 @@ class LLM:
     @property
     def can_escalate(self) -> bool:
         return self._escalation is not None
+
+    def healthcheck(self) -> str:
+        """Issue a tiny completion to confirm the model server is reachable.
+
+        Returns the model's reply on success. Raises RuntimeError with the endpoint URL and
+        model name on any failure, so a misconfigured server is diagnosed *before* a full run
+        rather than after a long, doomed loop.
+        """
+        try:
+            resp = self._primary.chat.completions.create(
+                model=self.cfg.name,
+                messages=[{"role": "user", "content": "ping"}],
+                temperature=0.0,
+                max_tokens=1,
+            )
+        except Exception as e:  # noqa: BLE001 - we re-raise with diagnostic context
+            raise RuntimeError(
+                f"model preflight failed: cannot reach model '{self.cfg.name}' at "
+                f"'{self.cfg.base_url}': {type(e).__name__}: {e}"
+            ) from e
+        return resp.choices[0].message.content or ""

@@ -14,24 +14,39 @@ def load_targets(path: str | Path) -> dict[str, dict]:
     return yaml.safe_load(Path(path).read_text())
 
 
+# Optional TargetSpec fields the theorem builder reads; absent ones keep their addloop
+# defaults (see TargetSpec / the field-doc block at the top of eval/targets.yaml).
+_OPTIONAL_SPEC_FIELDS = (
+    "timing_functor", "timing_submodule", "program_module",
+    "auto_module", "cpu_module", "cpu_config", "postcondition",
+)
+
+
 def build_spec(t: dict, repo_root: Path, name: str | None = None):
+    overrides = {k: t[k] for k in _OPTIONAL_SPEC_FIELDS if k in t}
     spec = TargetSpec(
-        name=name or t["lifted_program"],        
+        name=name or t["lifted_program"],
         requires=t["requires"],
         lifted_program=t["lifted_program"],
         entry_addr=int(str(t["entry_addr"]), 0),   # accept 0x.. hex
         exit_point=t["exit_point"],
         theorem_name=t["theorem_name"],
         params=[tuple(p) for p in t.get("params", [])],
+        **overrides,
     )
 
     cfg_desc = t.get("description", "")
+    skeleton = None
     objdump_rel = t.get("objdump")
     if objdump_rel:
         op = repo_root / "eval" / objdump_rel
         if op.exists():
             cfg = build_cfg(parse_objdump(op.read_text()))
             cfg_desc = f"{cfg_desc}\n{cfg.describe()}"
+            # Skeleton synthesis needs both a CFG and a pinned postcondition; otherwise leave it
+            # None and the orchestrator falls back to the free-form path.
+            if spec.postcondition:
+                skeleton = cfg.skeleton_plan(spec)
 
     secret = t.get("secret_param")
 
@@ -44,7 +59,7 @@ def build_spec(t: dict, repo_root: Path, name: str | None = None):
 
     gold_proof = t.get("gold_proof")  # list[str] | None
 
-    return spec, cfg_desc, secret, gold_inv, gold_proof
+    return spec, cfg_desc, secret, gold_inv, gold_proof, skeleton
 
 
 def _extract_invariant(vsrc: str) -> str | None:

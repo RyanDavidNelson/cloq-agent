@@ -12,6 +12,7 @@ Budgets bound every loop. Each solved proof makes the next easier (skill accumul
 """
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +24,8 @@ from ..proof.petanque_driver import PetanqueDriver
 from ..proof.hammer import try_ladder, run_script
 from ..proof.theorem_builder import TargetSpec, render, write
 from . import invariant_synth, tactic_repair
+
+log = logging.getLogger("cloq_agent.orchestrator")
 
 
 @dataclass
@@ -72,6 +75,7 @@ class Orchestrator:
         secret_param: str | None = None,
         gold_invariant: str | None = None,
         gold_proof: list[str] | None = None,
+        invariant_skeleton=None,
     ) -> ProofResult:
         t0 = time.time()
         llm_calls = 0
@@ -83,12 +87,20 @@ class Orchestrator:
             else:
                 retrieved = self.retriever.retrieve(cfg_description)
                 escalate = attempt > 1 and self.llm.can_escalate
+                # Skeleton mode only applies when the CFG produced a skeleton (objdump +
+                # pinned postcondition); otherwise this falls back to the free-form path.
+                mode = self.cfg.agent.synthesis_mode if invariant_skeleton is not None else "freeform"
                 invariant_src = invariant_synth.synthesize(
                     self.llm, name=spec.name, entry=spec.entry_addr,
                     cfg_description=cfg_description, retrieved=retrieved, escalate=escalate,
+                    mode=mode, skeleton=invariant_skeleton,
                 )
                 llm_calls += 1
                 escalated = escalated or escalate
+                log.info(
+                    "[%s] attempt %d: %s-mode model-proposed invariant (escalate=%s):\n%s",
+                    spec.name, attempt, mode, escalate, invariant_src,
+                )
 
             lint = spec_lint(spec, invariant_src, secret_param=secret_param)
             if lint is not None:

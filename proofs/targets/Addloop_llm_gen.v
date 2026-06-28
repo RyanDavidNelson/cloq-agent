@@ -22,21 +22,17 @@ Module addloop_timing_gen_Proof (cpu : RVCPUTimingBehavior).
   Import Inner.Program_addloop.
   Import Inner.addloopAuto.
 
-Definition addloop_timing_invs (x y : N) (t:trace) :=
+Definition addloop_llm_timing_invs (x y : N) (t:trace) :=
 match t with (Addr a, s) :: t' => match a with
     | 0x8  => Some (s R_T0 = x /\ s R_T1 = y /\
         cycle_count_of_trace t' = 0)
     | 0x10 => Some (s R_T2 = 1 /\ s R_T3 = 0 /\ 
         s R_T0 <= x /\
         cycle_count_of_trace t' = 
-            tori + tandi + (x - s R_T0) * (tfbeq + taddi + tsub + ttbeq))
-        (* 2 + 2 + (x - t0) * (3 + 2 + 2 + (5 + (ML - 1)) *)
-    | 0x20 => Some (cycle_count_of_trace t' = 
-            tori + tandi + x * (tfbeq + taddi + tsub + ttbeq) + ttbeq)
-        (* 2 + 2 + (5 + (ML - 1)) + x * (3 + 2 + 2 + (5 + (ML - 1))) *)
+            (x - s R_T0) * (tbeq + taddi + tsub + ttbeq))
+    | 0x20 => Some (cycle_count_of_trace t' = 0)
     | _ => None end
-| _ => None
-end.
+  | _ => None end.
 
   Theorem addloop_timing_gen :
     forall s t s' x' (x : N) (y : N)
@@ -44,7 +40,7 @@ end.
       (MDL: models rvtypctx s)
       (T0: s R_T0 = x)
       (T1: s R_T1 = y),
-    satisfies_all lifted_prog (addloop_timing_invs x y) exits ((x',s') :: t).
+    satisfies_all lifted_prog (addloop_llm_timing_invs x y) exits ((x',s') :: t).
   Proof.
     Admitted.
 

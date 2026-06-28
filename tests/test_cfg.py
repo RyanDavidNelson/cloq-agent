@@ -33,3 +33,57 @@ def test_describe_is_nonempty():
     cfg = build_cfg(parse_objdump(ADDLOOP))
     desc = cfg.describe()
     assert "loop headers" in desc and "0x0" in desc
+
+
+# The real lifted addloop listing (entry 0x8, exit 0x20) shipped as an eval fixture.
+_ADDLOOP_OBJDUMP = Path(__file__).resolve().parents[1] / "eval" / "targets" / "addloop.objdump"
+
+
+def test_invariant_points_for_addloop_fixture():
+    cfg = build_cfg(parse_objdump(_ADDLOOP_OBJDUMP.read_text()))
+    points = cfg.invariant_points()
+
+    # Assert against what the parser actually recovered, not a hardcoded list: the points are
+    # exactly entry + loop headers + exits, de-duplicated and ordered.
+    expected = sorted({cfg.entry, *cfg.loop_headers, *cfg.exit_points()})
+    assert points == expected
+
+    # And those parser-derived addresses are the documented addloop ones: entry 0x8, a single
+    # loop header, exit 0x20.
+    assert cfg.entry == 0x8
+    assert cfg.exit_points() == [0x20]
+    assert len(cfg.loop_headers) == 1
+    (loop_header,) = cfg.loop_headers
+    assert points == [0x8, loop_header, 0x20]
+    assert 0x8 < loop_header < 0x20  # the header sits inside the body, between entry and exit
+
+
+class _Spec:
+    """Minimal spec stand-in: skeleton synthesis needs `params` + a pinned `postcondition`."""
+    name = "addloop"
+    params = [("x", "N"), ("y", "N")]
+    postcondition = "cycle_count_of_trace t' = x * t_body"
+
+
+def test_skeleton_pins_addresses_and_postcondition():
+    cfg = build_cfg(parse_objdump(_ADDLOOP_OBJDUMP.read_text()))
+    plan = cfg.skeleton_plan(_Spec())
+
+    # Holes are entry + loop headers (the model's job); exits stay pinned, never a hole.
+    assert plan.exit_addrs == cfg.exit_points()
+    assert set(plan.hole_addrs).isdisjoint(plan.exit_addrs)
+    assert set(plan.hole_addrs) | set(plan.exit_addrs) == set(cfg.invariant_points())
+
+    # The skeleton shown to the model carries one greppable hole marker per hole address and the
+    # pinned postcondition (verbatim) on the exit arm.
+    for a in plan.hole_addrs:
+        assert f"HOLE:0x{a:x}" in plan.prompt_text
+    assert _Spec.postcondition in plan.prompt_text
+
+    # fill() re-pins by construction: even if the model omits everything, addresses + match
+    # scaffold + postcondition survive, and missing holes become an obviously-false sentinel.
+    filled = plan.fill({})
+    for a in cfg.invariant_points():
+        assert f"| 0x{a:x} =>" in filled
+    assert _Spec.postcondition in filled
+    assert "UNFILLED HOLE" in filled
