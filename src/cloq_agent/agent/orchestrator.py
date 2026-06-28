@@ -21,7 +21,7 @@ from ..config import Config
 from ..models import LLM
 from ..rag.retriever import Retriever
 from ..proof.petanque_driver import PetanqueDriver
-from ..proof.hammer import try_ladder, try_structured, run_script
+from ..proof.hammer import try_ladder, run_script, STRUCTURED_SCRIPTS
 from ..proof.theorem_builder import TargetSpec, render, write
 from . import invariant_synth, tactic_repair
 
@@ -42,6 +42,43 @@ class ProofResult:
     error: str | None = None
 
 
+@dataclass
+class _SearchNode:
+    """A node in the DFS proof search = a petanque state plus the tactic path that produced it.
+
+    The state carries the FULL goal stack, so a multi-subgoal `destruct_inv` fan-out is one node
+    (solved iff `state.finished`) — the search never hand-manages sibling subgoals. `path` is kept
+    so a stale handle can be reconstructed via `driver.replay_from_root` (Task 1 safety net)."""
+    state: object
+    path: list[str]
+    depth: int
+
+
+class _RunCounter:
+    """Thin proxy that counts every `driver.run` against the search's total-runs budget, while
+    transparently forwarding the other driver methods the hammer ladder / scripts use. Lets the
+    budget cover runs made *inside* try_ladder / run_script, not just the explicit ones."""
+
+    def __init__(self, driver, budget: int):
+        self._driver = driver
+        self._budget = budget
+        self.runs = 0
+
+    @property
+    def over(self) -> bool:
+        return self.runs >= self._budget
+
+    def run(self, state, tactic, timeout_s=None):
+        self.runs += 1
+        return self._driver.run(state, tactic, timeout_s)
+
+    def _result(self, state, *, ok, error):
+        return self._driver._result(state, ok=ok, error=error)
+
+    def replay_from_root(self, file, theorem, path):
+        return self._driver.replay_from_root(file, theorem, path)
+
+
 def spec_lint(spec: TargetSpec, invariant_src: str, *, secret_param: str | None) -> str | None:
     """Reject specs that are trivially true *by construction*. Returns an error string or None.
 
@@ -55,6 +92,9 @@ def spec_lint(spec: TargetSpec, invariant_src: str, *, secret_param: str | None)
         )
     if "cycle_count" not in invariant_src:
         return f"spec rejected: invariant for '{spec.name}' never constrains cycle_count"
+    # NOTE: a per-arm `cycle_count_of_trace` check was tried and removed — it false-rejects the
+    # legitimate EXIT arm, which references a named postcondition predicate (`time_of_X t ...`)
+    # whose body holds the cycle equation elsewhere, so the literal token isn't in the arm.
     return None
 
 
@@ -139,6 +179,11 @@ class Orchestrator:
 
             res = self._discharge(driver, start, spec, attempt, llm_calls, escalated, t0,
                                   proof_library=proof_library)
+            # Carry the search's tactic-repair LLM calls back into our running total — `_discharge`
+            # returns `llm_calls + repair_calls`, so the final report counts repair, not just
+            # synthesis (otherwise a failed run under-reports its true LLM spend).
+            llm_calls = res.llm_calls
+            escalated = res.escalated
             if res.proved:
                 if self.fpga_oracle is not None:
                     report = self.fpga_oracle(spec.name)
@@ -155,69 +200,128 @@ class Orchestrator:
 
     def _discharge(self, driver, start, spec, attempt, llm_calls, escalated, t0,
                    proof_library=None) -> ProofResult:
-        """Close residual goals with hammer-first, LLM-repair fallback under an iteration budget."""
-        script: list[str] = []
-        state = start.state
+        """Depth-first proof search WITH BACKTRACKING over petanque states.
 
-        # cheap first pass
-        ladder = try_ladder(driver, state)
-        if ladder.closed:
-            script.append(ladder.tactic or "")
+        A node is a petanque state; success is `state.finished` (petanque holds the whole
+        multi-subgoal conjunction, so we never hand-manage sibling subgoals). At each node we try
+        the cheap ladder first (hammer-first), then expand: the deterministic structural prelude at
+        the root, LLM tactic-repair candidates deeper. Candidates that make progress (a new goal
+        hash) become children pushed best-first onto a LIFO stack; a dead-end branch is abandoned by
+        popping back to the parent's next candidate. Budgets bound depth, total runs, and LLM calls.
+        """
+        cfg = self.cfg.agent
+        file = str(self.workspace / "targets" / f"{spec.name.capitalize()}_gen.v")
+        theorem = spec.theorem_name
+        cd = _RunCounter(driver, cfg.search_max_runs)
+
+        # Cheap-first on the raw start state (straight-line / near-gold closes with no search).
+        quick = try_ladder(cd, start.state)
+        if quick.closed:
             return ProofResult(spec.name, True, attempt, 0, llm_calls, escalated,
-                               ladder.tactic, time.time() - t0, proof_script=script)
+                               quick.tactic, time.time() - t0,
+                               proof_script=[quick.tactic or ""])
 
-        # Structured pass: the generic Cloq proof skeleton (prove_invs + step + hammer), then the
-        # reusable proof-script library (gold proofs from solved targets). With a correct invariant
-        # this closes straight-line / single-branch targets and any target whose arm structure
-        # matches a library script, before any LLM tactic repair. No llm_calls — fixed automation.
-        structured = try_structured(driver, state, extra_scripts=proof_library)
-        if structured.closed:
-            return ProofResult(spec.name, True, attempt, 0, llm_calls, escalated,
-                               "structured", time.time() - t0,
-                               proof_script=list(structured.tactic and [structured.tactic] or []))
+        frontier: list[_SearchNode] = [_SearchNode(start.state, [], 0)]
+        visited: set[str] = {_goal_hash(start.goals)}
+        # past_failures keyed by goal-hash: a tactic that failed on this exact goal is never re-proposed.
+        failures: dict[str, set[str]] = {}
+        repair_calls = 0          # LLM propose() calls — capped by max_iterations
+        nodes = 0
+        deepest: list[str] = []
+        residual = start.goals
 
-        # iterative repair — resume from the structured driver's furthest-progress state (the
-        # residual cycle goals), not the raw `satisfies_all`, so repair and the fed-back error
-        # target the actual stuck obligation.
-        resume = structured.state if structured.residual else state
-        cur = driver._result(resume, ok=True, error=None)  # refresh goals
-        for it in range(1, self.cfg.agent.max_iterations + 1):
+        def success(path: list[str], closing: str | None) -> ProofResult:
+            return ProofResult(spec.name, True, attempt, nodes, llm_calls + repair_calls,
+                               escalated, closing, time.time() - t0, proof_script=path)
+
+        while frontier and not cd.over:
+            node = frontier.pop()
+            nodes += 1
+
+            # Refresh goals from the stored handle; replay from root if the handle is stale (Task 1
+            # found handles stay live, so this is just a safety net).
+            try:
+                cur = cd._result(node.state, ok=True, error=None)
+            except Exception:
+                cur = cd.replay_from_root(file, theorem, node.path)
+                if not cur.ok:
+                    continue
+
             if cur.finished:
-                return ProofResult(spec.name, True, attempt, it, llm_calls, escalated,
-                                   script[-1] if script else None, time.time() - t0,
-                                   proof_script=script)
+                return success(node.path, node.path[-1] if node.path else None)
             if not cur.goals:
-                break
-            goal = cur.goals[0]
-            escalate = it > self.cfg.agent.escalate_after and self.llm.can_escalate
-            retrieved = self.retriever.retrieve(goal.conclusion or goal.pretty)
-            tactics = tactic_repair.propose(self.llm, goal, retrieved, escalate=escalate)
-            llm_calls += 1
-            escalated = escalated or escalate
+                continue
+            if len(node.path) > len(deepest):
+                deepest, residual = node.path, cur.goals
 
-            progressed = False
-            for tac in tactics:
-                step = driver.run(cur.state, tac)
-                if step.ok:
-                    script.append(tac)
-                    cur = step
-                    progressed = True
-                    # try to finish immediately after progress
-                    quick = try_ladder(driver, cur.state)
-                    if quick.closed:
-                        script.append(quick.tactic or "")
-                        return ProofResult(spec.name, True, attempt, it, llm_calls, escalated,
-                                           quick.tactic, time.time() - t0, proof_script=script)
-                    break
-            if not progressed:
-                break
+            # Hammer-first at every node.
+            lad = try_ladder(cd, cur.state)
+            if lad.closed:
+                return success(node.path + [lad.tactic or ""], lad.tactic)
 
-        # Surface the residual obligation (the unproven goal) as the error, so the orchestrator
-        # feeds it into the next synthesis attempt instead of a generic "budget exhausted" string.
-        residual = cur.goals or structured.residual
-        return ProofResult(spec.name, False, attempt, self.cfg.agent.max_iterations,
-                           llm_calls, escalated, None, time.time() - t0,
-                           proof_script=script, error=_unproved_goal_msg(residual))
+            if node.depth >= cfg.search_max_depth or cd.over:
+                continue
+
+            children: list[_SearchNode] = []
+
+            # Root only: the deterministic structural prelude (apply prove_invs … destruct_inv) and
+            # the reusable proof-skill library. These play multi-tactic scripts that advance the raw
+            # `satisfies_all` goal to the post-`destruct_inv` fan-out — not LLM territory.
+            if node.depth == 0:
+                for script in [*STRUCTURED_SCRIPTS, *(proof_library or [])]:
+                    if cd.over:
+                        break
+                    out = run_script(cd, cur.state, list(script))
+                    if out.closed:
+                        return success(node.path + list(script), script[-1] if script else None)
+                    h = _goal_hash(out.residual)
+                    if out.residual and h not in visited:
+                        visited.add(h)
+                        children.append(_SearchNode(out.state, node.path + list(script), node.depth + 1))
+
+            # LLM repair on goals[0] — when the deterministic prelude produced nothing (root) or at
+            # any deeper fan-out node, under the LLM-call cap. Skipped entirely in the
+            # deterministic-only ablation (`llm_repair_enabled=False`).
+            if (not children and cfg.llm_repair_enabled
+                    and repair_calls < cfg.max_iterations and not cd.over):
+                goal = cur.goals[0]
+                past = failures.setdefault(_goal_hash(cur.goals), set())
+                escalate = repair_calls >= cfg.escalate_after and self.llm.can_escalate
+                retrieved = self.retriever.retrieve(goal.conclusion or goal.pretty)
+                tactics = tactic_repair.propose(self.llm, goal, retrieved,
+                                                escalate=escalate, past_failures=past)
+                repair_calls += 1
+                escalated = escalated or escalate
+                for tac in tactics:
+                    if cd.over:
+                        break
+                    step = cd.run(cur.state, tac)
+                    if not step.ok:
+                        past.add(tac)              # remember this dead end for this goal
+                        continue
+                    if step.finished:
+                        return success(node.path + [tac], tac)
+                    h = _goal_hash(step.goals)
+                    if h in visited:               # prune revisits / cycles
+                        continue
+                    visited.add(h)
+                    children.append(_SearchNode(step.state, node.path + [tac], node.depth + 1))
+
+            # Push so the most-promising candidate (propose() is best-first) is popped FIRST (LIFO).
+            for child in reversed(children):
+                frontier.append(child)
+
+        # No path closed: surface the deepest residual obligation so the orchestrator can feed it
+        # into the next synthesis attempt (verifier-guided refinement), else a budget note.
+        return ProofResult(spec.name, False, attempt, nodes, llm_calls + repair_calls,
+                           escalated, None, time.time() - t0, proof_script=deepest,
+                           error=_unproved_goal_msg(residual) if residual else "search budget exhausted")
+
+
+def _goal_hash(goals) -> str:
+    """Canonical hash of a petanque goal stack: the pretty-prints joined by a separator. Two states
+    with the same open-goal stack are equivalent for the search, so this prunes revisits/cycles."""
+    return "\n---\n".join(g.pretty for g in goals)
 
 
 def _inv_name(invariant_src: str) -> str:

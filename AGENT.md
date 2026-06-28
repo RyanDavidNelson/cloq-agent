@@ -199,9 +199,11 @@ pinned from spec.*)
 
 Sometimes the invariant is right but automation stalls on a residual goal. We feed the model the
 **goal state** (hypotheses + conclusion, as petanque pretty-prints it) plus retrieved lemmas, and ask
-for up to five candidate tactics, most promising first. We parse them line-by-line; the orchestrator
-tries each through petanque, keeping whatever makes progress. Same generator–verifier dance, finer
-grain.
+for up to five candidate tactics, most promising first (excluding any already known to fail on this
+goal). We parse them line-by-line; the **search** (Step 7) tries each through petanque as a branch to
+explore. Same generator–verifier dance, finer grain. On an invariant/branch-point goal the prompt
+biases toward the concrete Picinae case-splitters (`destruct_inv`, `destruct PRE as (...)`) and the
+memory-aliasing closers, because closing a multi-arm conjunction needs a split, not a single leaf.
 
 ### Step 7 — The orchestrator: the loop that ties it together (`agent/orchestrator.py`)
 
@@ -215,8 +217,10 @@ plain English:
 3. **Synthesize** an invariant (gold one for the smoke test; otherwise the model).
 4. **Render** the theorem `.v` and `start` it in petanque.
 5. **Hammer-first**: try the ladder; if it closes, done.
-6. Otherwise **repair**, budgeted: read the goal → retrieve → propose tactics → apply → try the ladder
-   again, escalating the model if still stuck after N iterations.
+6. Otherwise **search**, budgeted: a depth-first, backtracking proof search over petanque states —
+   hammer-first at every node, the deterministic structural prelude (`apply prove_invs … destruct_inv`)
+   at the root, LLM tactic-repair on the fan-out subgoals deeper, escalating the model after N calls.
+   A node is solved iff `state.finished`; dead-end branches are abandoned by backtracking.
 7. On `Qed`, optionally let the **FPGA oracle veto** the result (measured cycles must match the proven
    formula).
 8. **Store the solved proof back into the RAG corpus**, so the next target can retrieve it.
@@ -265,30 +269,58 @@ def prove(self, driver, spec, *, cfg_description, secret_param=None, gold_invari
     return ProofResult(spec.name, proved=False, ...)                    # exhausted the budget
 ```
 
-And `_discharge`, the generator–verifier dance made concrete:
+And `_discharge`, the generator–verifier dance made concrete — a **depth-first search with
+backtracking** over petanque states (it replaced an earlier greedy loop that read only `goals[0]`,
+committed to the first tactic that *applied*, discarded the prior state, and could never undo a
+`destruct_inv` that led to an unclosable arm):
 
 ```python
-def _discharge(self, driver, start, spec, ...):
-    if (ladder := try_ladder(driver, start.state)).closed:             # cheap automation first
-        return ProofResult(..., proved=True, closing_tactic=ladder.tactic)
+def _discharge(self, driver, start, spec, ..., proof_library=None):
+    cd = _RunCounter(driver, cfg.search_max_runs)            # bounds TOTAL driver.run calls
+    if (q := try_ladder(cd, start.state)).closed:            # straight-line / near-gold: no search
+        return ProofResult(..., proved=True, closing_tactic=q.tactic)
 
-    cur = driver._result(start.state, ...)                             # refresh goals
-    for it in range(1, self.cfg.agent.max_iterations + 1):             # budget on repair steps
-        if cur.finished: return ProofResult(..., proved=True)
-        goal = cur.goals[0]                                            # the stuck obligation
-        retrieved = self.retriever.retrieve(goal.conclusion)          # RAG on the goal text
-        tactics   = tactic_repair.propose(self.llm, goal, retrieved)  # LLM proposes tactics
-        for tac in tactics:                                           # verifier adjudicates each
-            step = driver.run(cur.state, tac)
-            if step.ok:
-                cur = step
-                if (quick := try_ladder(driver, cur.state)).closed:   # progress? try to finish
-                    return ProofResult(..., proved=True)
-                break
-        else:
-            break                                                     # no tactic helped → give up
-    return ProofResult(..., proved=False, error="repair budget exhausted")
+    frontier = [_SearchNode(start.state, path=[], depth=0)]  # explicit LIFO stack (= DFS)
+    visited  = {_goal_hash(start.goals)}                     # prune revisited goal-stacks
+    failures = {}                                            # per-goal set of dead-end tactics
+    while frontier and not cd.over:                          # budget: runs / depth / LLM calls
+        node = frontier.pop()
+        cur  = cd._result(node.state, ...)                   # (stale handle? replay_from_root)
+        if cur.finished:                                     # SUCCESS iff petanque says finished
+            return ProofResult(..., proved=True, proof_script=node.path)
+        if (lad := try_ladder(cd, cur.state)).closed:        # hammer-first at EVERY node
+            return ProofResult(..., proved=True, proof_script=node.path + [lad.tactic])
+
+        children = []
+        if node.depth == 0:                                  # ROOT: deterministic structural prelude
+            for script in [*STRUCTURED_SCRIPTS, *proof_library]:   #   + reusable proof-skill library
+                out = run_script(cd, cur.state, script)      #   advances past `destruct_inv` fan-out
+                if out.closed: return ProofResult(..., proved=True, proof_script=node.path+script)
+                children.append(child(out.state, node.path + script))      # if it made progress
+        if not children:                                     # DEEPER: LLM repair on goals[0]
+            goal = cur.goals[0]
+            past = failures[_goal_hash(cur.goals)]
+            tactics = tactic_repair.propose(self.llm, goal, retrieved, past_failures=past)
+            for tac in tactics:                              # verifier adjudicates each
+                step = cd.run(cur.state, tac)
+                if not step.ok:        past.add(tac); continue              # remember the dead end
+                if step.finished:      return ProofResult(..., proved=True, proof_script=node.path+[tac])
+                children.append(child(step.state, node.path + [tac]))      # new goal-hash only
+        for c in reversed(children): frontier.append(c)      # best-first candidate popped FIRST
+    return ProofResult(..., proved=False, error=<deepest residual goal>)   # fed back to refinement
 ```
+
+Why a search and not a loop: **a node is a petanque state**, which carries the *whole* goal stack,
+so a `destruct_inv` fan-out (one subgoal per program point; branch points add taken/not-taken arms)
+is handled for free — success is simply `state.finished`, never hand-managed sibling subgoals. The
+**Picinae tactics stay opaque** to the search: it runs the string and lets Rocq adjudicate;
+domain knowledge lives in the deterministic prelude, the ladder, and RAG — not the algorithm.
+**Backtracking is implicit**: a dead-end branch pushes no children, so the stack pops back to the
+parent's next candidate, abandoning a bad `destruct_inv`. Two safety rails make it robust at scale:
+a **per-tactic timeout** (`agent.tactic_timeout_s`) so a hung `repeat step`/`psimpl` is a skipped
+rung rather than a stall, and **replay-from-root** (`driver.replay_from_root(file, theorem, path)`)
+as a fallback if a stored state handle is ever rejected as stale. Everything is **budgeted**
+(`search_max_depth`, `search_max_runs`, `max_iterations` as the LLM-call cap).
 
 The shape to notice, exactly parallel to the proof side: every `synthesize`/`propose` is a **guess**,
 every `driver.run`/`try_ladder` is a **check**. The model never writes into the trusted artifact; it

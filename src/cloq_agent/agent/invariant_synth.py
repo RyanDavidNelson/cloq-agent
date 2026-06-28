@@ -79,6 +79,12 @@ do not copy the registers/constants):
   an existential and tie the pointer to it:
   Some (exists i, i <= len /\\ s R_A2 = base ⊕ (4 * i) /\\
         cycle_count_of_trace t' = <pre> + i * (<one fall-through iteration body>))
+Memory-loop frame (CRITICAL for targets that LOAD from memory in the loop, e.g. array scans):
+the loop-header arm MUST also carry the FRAME facts that make it inductive, or the proof cannot
+close — typically (a) the scanned region is unchanged, `forall i, i < <counter> -> s V_MEM32 Ⓓ[
+<addr i>] = base_mem Ⓓ[<addr i>]`, and (b) the "not done yet" fact over already-scanned elements,
+`forall i, i < <counter> -> <predicate about element i>`. Omitting these is the most common cause
+of a type-checking-but-unprovable invariant. Carry the base memory (`base_mem`) as the reference.
 Hard constraints:
 - Reproduce EVERY `| 0xADDR => ...` arm with its address unchanged.
 - Do NOT add, remove, or renumber any address.

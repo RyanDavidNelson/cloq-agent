@@ -1,236 +1,190 @@
 # CLAUDE.md
 
-Guidance for Claude Code working in this repo. Read this before editing.
-
 ## Project
-cloq-agent: agentic synthesis + machine-checking of **Cloq** timing proofs (WCET +
-constant-time) over **Picinæ**-lifted RISC-V binaries, using a local LLM + retrieval,
-validated against a NEORV32 softcore on an FPGA. Two containers via `docker/compose.yaml`:
+cloq-agent: agentic synthesis + machine-checking of Cloq timing proofs over
+Picinae-lifted RISC-V binaries. Two containers via `docker/compose.yaml`:
 `rocq` (pet-server on :8765) and `agent` (the Python orchestrator).
-
-The load-bearing design fact: a Cloq timing proof's structure is **isomorphic to the
-control-flow graph**, and `repeat step; psimpl; lia` (the hammer ladder) discharges the bulk
-automatically. The only creative input is the **invariant set** — for each loop a closed-form
-timing expression `(c0 − c)·t` plus a termination quantity. So the LLM's whole job is to
-propose that invariant (and, as a fallback, repair tactics on residual goals). It is a
-**generator**; petanque/Rocq is the **verifier**; the generator is never trusted — a wrong
-guess yields a *failed* proof, not an unsound one.
 
 ## How to run
 - Build/up proof engine: `docker compose -f docker/compose.yaml up -d --build rocq`
-- Hand-built smoke build: `docker compose -f docker/compose.yaml exec rocq bash -lc 'eval $(opam env); cd /work/proofs && coq_makefile -f _CoqProject -o Makefile.coq && make -f Makefile.coq'`
-- Agent end-to-end, **no LLM** (gold path): `docker compose -f docker/compose.yaml run --rm agent prove addloop`
-- Agent end-to-end, **LLM synthesis** (once `addloop_llm` exists): `... run --rm agent prove addloop_llm`
-- Build the RAG index (do this before any LLM run): `... run --rm agent index`
-- Model server: Ollama on the host (`qwen3-coder:30b`), reached at `host.docker.internal:11434`.
-  Already running, GPU-resident. The agent's LLM client lives in `src/cloq_agent/models.py`
-  (`LLM(cfg.model)`), constructed in the orchestrator but only *called* off the non-gold path.
+- Smoke proof (hand-built): `docker compose -f docker/compose.yaml exec rocq bash -lc 'eval $(opam env); cd /work/proofs && coq_makefile -f _CoqProject -o Makefile.coq && make -f Makefile.coq'`
+- Agent end-to-end: `docker compose -f docker/compose.yaml run --rm agent prove addloop`
+- Model server: Ollama on the host (qwen3-coder:30b), via `host.docker.internal:11434`. Already running, GPU-resident.
+- Tests: `docker compose -f docker/compose.yaml run --rm agent pytest -q`
 
-## Where the code lives
-```
-src/cloq_agent/
-  proof/
-    petanque_driver.py   thin typed wrapper over pytanque (start / run tactic / read goals)
-    hammer.py            ordered tactic ladder tried BEFORE any LLM call (hammer, lia, sauto…)
-    theorem_builder.py   TargetSpec + PROOF_TEMPLATE + render()/write() — assembles the .v
-  rag/
-    embeddings.py store.py index.py retriever.py   goal-state / CFG-description retrieval
-  agent/
-    invariant_synth.py   synthesize(llm, *, name, entry, cfg_description, retrieved, escalate)
-    tactic_repair.py     LLM proposes ≤5 tactics for a stuck goal; orchestrator tries each
-    orchestrator.py      Orchestrator.prove(...): the budgeted think/act loop + spec_lint
-  lift/
-    cfg.py               parse_objdump() + build_cfg(); CFG.describe() → prompt context
-  models.py              LLM client (Ollama/vLLM, OpenAI-compatible HTTP)
-  cli.py                 index | prove | eval
-eval/
-  targets.yaml           target registry (specs, objdump, gold_invariant/gold_proof, secrets)
-  targets.py             build_spec(): yaml → (TargetSpec, cfg_description, secret, gold_inv, gold_proof)
-tests/                   pytest; test_theorem_builder.py covers render()
-vendor/picinae/          Picinæ + Cloq. READ-ONLY. Never edit; check its license before redistribution.
-```
+## Current task (where we are)
+DONE: the discharge loop is now a **DFS-with-backtracking proof search over petanque states**
+(replaced the greedy single-goal repair that couldn't handle `destruct_inv` / branch fan-out —
+the dominant failure mode on the FreeRTOS list set, ct-swap, chacha20). All four coordinated
+edits landed (per-tactic timeout, theorem_builder prelude/scope + filename fix, ladder
+workhorses, DFS `_discharge`), plus tactic_repair past-failures/splitter-bias and RAG indexing
+of vendored example proof bodies. Verified: `pytest -q` green (incl. mock-driver backtracking
+tests + skippable real-petanque integration tests), `prove addloop` gold path closes with
+llm_calls==0, and the search reaches addloop's 2-arm `destruct_inv` fan-out against pet-server.
 
-## The loop (orchestrator.py, `Orchestrator.prove`)
-1. If `gold_invariant` is set and attempt==1 → use it (no LLM). Else
-   `retriever.retrieve(cfg_description)` → `invariant_synth.synthesize(self.llm, …)` (`llm_calls += 1`).
-2. `spec_lint` rejects vacuous claims (secret must appear in a constant-time invariant;
-   `cycle_count` must be constrained).
-3. `render(spec, invariant_src, …)` writes `proofs/targets/<Name>_gen.v`; `driver.start(...)`.
-4. If the target also has a `gold_proof`, the deterministic smoke path runs that script verbatim.
-   Otherwise `_discharge`: hammer ladder first; on residual goals, retrieve → `tactic_repair` →
-   apply, budgeted, escalating the model after N tries.
-5. On Qed (optionally vetoed by the FPGA oracle), the solved proof is written back into the RAG
-   corpus (skill accumulation).
+DFS+LLM eval (qwen3-coder:30b, skeleton synthesis): 5/7 `_llm` targets PROVED — the straight-line
+/ single-branch list ops (`vListInitialise/Item/InsertEnd`, `uxListRemove` incl. its 2-arm
+`destruct_inv`) and `addloop_llm` (via proof-library reuse), all closed at the ROOT by the
+deterministic structured prelude with ZERO tactic-repair calls (LLM's only input = the invariant).
+2 FAILED — diagnosed by probing the generated `.v`:
+- `find_in_array_llm`: invariant type-checks and reaches the fan-out, but the model put a
+  FUNCTIONAL-CORRECTNESS conjunct in it (`forall i, mem[arr+(i<<2)] <> key`) that no timing ladder
+  can discharge → an invariant-SYNTHESIS scope problem, not a closer gap.
+- `ct_swap_llm`: memory-aliasing residuals; the DFS makes ~17 repair calls/attempt (now visible
+  after the llm_calls accounting fix) but the LLM doesn't assemble the `preserve_noverlaps` /
+  `getmem_noverlap` sequence.
 
-## Current state
+KEY ABLATION (clean, equal 12-attempt budget, `agent.llm_repair_enabled` on/off): deterministic-only
+== full DFS+LLM == **5/5** on every solvable target, each `llm=1` (synthesis only, ZERO repair).
+So the **DFS+LLM tactic-repair layer is not the deciding factor on any current target** — the
+deterministic scaffold (structured prelude + proof library) + a correct invariant does the work. The
+backtracking search is correct and ready (mock-tested) but its regime — a fan-out the deterministic
+ladder can't close but the LLM can — is not yet exercised by a real target. The 2 failures fail in
+BOTH modes (`find_in_array_llm`: synthesized invariant MISSING the required memory-frame predicate;
+`ct_swap_llm`: memory aliasing). (Earlier "1/7 deterministic-only" was an artifact of a buggy lint,
+since removed — see below.)
 
-> **Consolidated capability/results write-up: [`docs/RESULTS.md`](docs/RESULTS.md).**
-> TL;DR — good at straight-line WCET/CT (synthesis **3/4**), handles the simplest counter loop
-> (addloop, via proof reuse; `loop_easy` **1/3**), and NOT data-structure loops (they need bespoke
-> ITP — decidability case-splits, aliasing). CFG-derived loop **timing is solved for all loops**;
-> the wall is proof **discharge**, not synthesis. The bullets below are the build log; the matrix
-> and the evidence for the ceiling are in `docs/RESULTS.md`.
+Follow-ups DONE:
+- **Ablation switch** — `agent.llm_repair_enabled` (default true; false = deterministic layer only).
+  This is what produced the finding above. KEEP.
+- **llm_calls accounting** — `prove()` carries `_discharge`'s repair calls into the final result
+  (was under-reporting failed runs as synthesis-only). Confirmed live (ct_swap 12→37).
+- **Loop-arithmetic ladder** — `hammer.py` `_LOOP_ARM` (unpack PRE + step + `msub_nowrap`/
+  `N_sub_distr`, all GLOBAL tactics) as two LADDER rungs + a STRUCTURED_SCRIPT. Functional, but has
+  not yet flipped a target (addloop_llm closes via library reuse). Kept as a grounded tool.
+- **Frame-prompt** — `SYSTEM_SKELETON` now demands the memory-frame predicate for memory-loop
+  targets (the real find_in_array gap) + a loop-counter worked exemplar in `tactic_repair.SYSTEM`.
+- **Escalation via env** — `CLOQ_ESCALATION_BASE_URL`/`_NAME`/`_API_KEY` (key falls back to
+  `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`); no secret in any committed file. Public repo.
 
-- **M1 DONE.** `prove addloop` closes end-to-end with `llm_calls=0`. It reports `llm_calls=0`
-  *by design*: addloop carries both a `gold_invariant` and a `gold_proof` in `targets.yaml`, so
-  the orchestrator short-circuits the LLM and runs the gold script. This is the M1 exit criterion,
-  not a bug.
-- **Tasks 1–3 DONE.** The theorem builder is **generalized** (Requires/program/exits/entry-regs
-  driven from `TargetSpec`; per-param register bindings `("x","N","R_A0")`); `cli.py` has the model
-  preflight (`doctor`, and `prove` healthchecks before any synthesis run); `lift/cfg.py` emits an
-  invariant *skeleton* (`skeleton_plan`) and `synthesize` has a `skeleton` mode that fills only the
-  loop/entry holes (config default `synthesis_mode: skeleton`). `addloop_llm` exists as the
-  synthesis twin of addloop.
-- **Task A DONE (first constant-time target).** `prove ct_swap` closes via the gold path
-  (`llm_calls=0`) reusing the vendored `crypto/ct_swap/ct_swap_proof.v` functor; `ct_swap_llm` is
-  the synthesis twin. The vendored `ct_swap(secret a0,*a a1,*b a2,len a3)` is an array swap whose
-  genuine secret (the a0 mask) **never appears in the timing invariant by design** — timing is a
-  closed form in `len`/`index` only. So `secret_param: base_addr_b` (the a2 data pointer): it
-  appears in the invariant yet no `cycle_count` arm depends on it (address-independence, the
-  structural obligation `spec_lint` checks). ct_swap uses **R_A2/R_A3**, not addloop's R_T0/R_T1.
-- **Task B DONE (M2: FreeRTOS list.c "easy four").** Four gold WCET targets — `vListInitialise`,
-  `vListInitialiseItem`, `vListInsertEnd`, `uxListRemove` — all close via the gold path
-  (`llm_calls=0`), each reusing its vendored `FreeRTOS/list/<fn>.v` functor over the shared
-  `RTOSDemo` binary. Three are straight-line (entry+exit arms, shared gold proof via a YAML
-  anchor); `uxListRemove` has a branch (extra invariant point `0x80002460`) + memory-noverlap side
-  conditions and a bespoke gold proof. `vListInsert` (the cyclic-list search loop) is deliberately
-  EXCLUDED (separate stretch task). The four `<fn>_llm` synthesis twins form the eval group
-  `list_easy_four`: run `cloq-agent eval list_easy_four` for the success-rate table.
-  `theorem_builder` gained `extra_binders` (ABI registers the invariant ignores — e.g.
-  vListInsertEnd's a1 pointer — become forall binders + register hyps, not invariant args).
-- The earlier module-scope blocker (`The reference startof was not found`) is **fixed**: the
-  generated theorem is stated *inside* a functor mirroring the vendored proof
-  (`Module {thm}_Proof (cpu : RVCPUTimingBehavior). Module Inner := TimingProof cpu. Import Inner.`),
-  so `startof`/`models`/`rvtypctx` are in scope. Preserve this scoping in any theorem-builder change.
-- The `TargetSpec.name` bug is **fixed**: the generated file is now `Addloop_gen.v` (target key),
-  not `Lifted_prog_gen.v`.
+DEAD ENDS (tried, reverted — do not re-attempt without new info):
+- **Per-arm `cycle_count` lint**: rejects the EXIT arm, which references a named postcondition
+  predicate (`time_of_X t ...`) whose cycle equation lives elsewhere → false-rejected 5/6 gold
+  invariants. Removed. (The "ban functional-correctness conjuncts" idea was also wrong: the gold
+  find_in_array invariant legitimately uses `forall i, mem[...] <> key`.)
+- **Deterministic noverlap closer**: `preserve_noverlaps`/`unfold_noverlap` are program-specific
+  `Local Ltac` (defined inside each vendored proof body), out of scope in our generated theorem, so
+  any such rung is a try-skipped no-op. Removed. REAL fix = `theorem_builder` must EMIT a
+  program-specific `unfold_noverlap`/`preserve_noverlaps` from the target's memory structure.
 
-- **Synthesis pipeline upgrades (took `eval list_easy_four` 0/4 → 3/4).** Five changes:
-  (1) the four list `_llm` twins run in **skeleton mode** (pinned exit arm `time_of_<fn> t`, CFG
-  supplies addresses/scaffold, model fills only entry/join holes); (2) `theorem_builder`/synth
-  **re-pin the freeform Definition signature** (`_force_signature`) so a spurious leading
-  `(p:addr)` binder can't under-apply `(inv_name args)`; (3) the orchestrator **feeds the previous
-  attempt's Rocq/lint error back** into the next `synthesize` call; (4) a **generic structured
-  proof driver** (`hammer.try_structured`: `apply prove_invs` + base case + `destruct_inv` +
-  `all: repeat step; hammer`) closes straight-line / single-branch goals with a correct invariant,
-  no LLM tactic-repair — this is what closes the three (`closing=structured`); (5)
-  `invariant_attempts` 4→12 (local LLM, cheap). The CFG also now reports the real **exit address**
-  (a `ret`/`jalr` is a leader) and **branch-join** invariant points.
-- `uxListRemove_llm` is still ❌: its `0x80002460` join arm needs the `noverlaps`/`getmem_noverlap`
-  branch reasoning, which the generic structured driver doesn't do. Closing it needs either a
-  noverlaps-aware structured candidate or LLM proof-repair that discovers the bespoke tactics.
-- **First NONLINEAR target: `find_in_array`** (a linear-search loop; WCET ~ len). The list "easy
-  four" are *linear* (constant cycle count), so the invariant is trivial and the LLM is barely
-  exercised; a loop forces a real `cycle_count_of_trace t' = a5 * (loop body)` closed-form arm —
-  the actual synthesis test. `prove find_in_array` closes via the gold path (`llm_calls=0`); its
-  `_llm` twin + `addloop_llm` + `ct_swap_llm` form the eval group **`loop_easy`** (the nonlinear
-  success-rate slice). `theorem_builder` gained `inv_args` (explicit invariant application list) so
-  the vendored invariant's vestigial leading `(s : store)` arg is passed without binding it.
+NEXT (open, re-prioritized by the ablation):
+- **The deterministic scaffold + synthesis is what wins** — invest there: get the synthesized
+  invariant to include the memory-frame predicate (find_in_array) and emit program-specific
+  noverlap-unfold tactics in `theorem_builder` (ct_swap). Both are deterministic-layer fixes.
+- **Find/build a target that actually needs the DFS+LLM repair** (fan-out the ladder can't close but
+  the LLM can) — otherwise the search layer, though correct, is unexercised complexity.
+- **Best-first upgrade (Task 8, optional):** `agent.search_strategy` flag swapping the DFS stack
+  for a priority queue keyed by open-goal count; keep DFS the default/tested path.
+- The `whammer` mention in docs/ARCHITECTURE.md "Automation" is stale (vendored closer is
+  `hammer`); fix when next touching that file.
 
-## Next tasks
-- More constant-time / WCET targets following the two-phase pattern (gold baseline target, then a
-  `<name>_llm` synthesis twin). Each new vendored program needs its `.vo` built in
-  `docker/Dockerfile.rocq` and an `-I` line in `proofs/_CoqProject` (see the ct_swap / FreeRTOS
-  entries). Group `_llm` twins under `groups:` in targets.yaml for an eval slice.
-- **`eval loop_easy` (nonlinear slice) = 0/3 → 1/3.** Two improvements landed here:
-  - **#1 Proof-skill reuse.** `try_structured` now also tries a *library of proven gold proof
-    scripts* (collected from the registry via `load_proof_library`, passed through `prove` →
-    `_discharge`). A synthesized invariant whose arm structure matches a solved target is
-    discharged by reusing that target's script — no LLM tokens. This closes **`addloop_llm`**
-    (its synthesized invariant matches addloop's gold; `closing=structured`). Scripts that don't
-    fit fail fast in `run_script` and are skipped, so trying the whole library is safe. (A purely
-    generic loop tactic was attempted first but is brittle on the `msub_nowrap`/`N_sub_distr`
-    wrap algebra — script reuse is the robust path and is the project's intended skill-accumulation.)
-  - **#2 Loop-arm synthesis prompt.** `SYSTEM_SKELETON` now spells out the loop-arm closed form
-    (`pre + counter_reg * t_body`, fall-through branch constant) and the exact legal `t*` constant
-    names — branches have BOTH `tt<op>`/`tf<op>`, never a bare `tbeq` (the `find_in_array_llm`
-    failure mode). The entry-hole hint says the entry arm is normally just `cycle = 0`.
-- **Two synthesis levers (for the harder loops):**
-  - **(a) Few-shot loop-arm exemplars.** `SYSTEM_SKELETON` carries worked loop-header arms from
-    OTHER programs (a down-counter, a rising index with a "not-done-yet" fact, and an implicit
-    pointer counter introduced via `exists i, … s R_A2 = base ⊕ (4*i) …`). Teaches the closed-form
-    shape (and the existential-index form needed to match the gold structure for library reuse).
-  - **(b) Witness-aware repair.** `tactic_repair` now knows the Cloq loop idioms — `tstep r5_step`,
-    `hammer` (its old prompt wrongly said `whammer`, which doesn't exist), `exists (1 + i)` for a
-    loop-counter existential (don't leave it to `eauto`), `rewrite msub_nowrap by lia`,
-    `rewrite N_sub_distr; lia`. A purely generic existential-loop *structured candidate* was tried
-    but `handle_ex`'s `eexists` metavariable can't be instantiated by `lia`/`hammer` on the
-    nonlinear `?i * body`, so the reliable path is the LLM repair supplying the explicit witness.
-- **Verifier-guided refinement.** `_discharge` now resumes repair from the structured driver's
-  furthest-progress state (the residual cycle goals via `HammerOutcome.residual` /
-  `run_script`), and feeds the *unproven goal* (the `cycle = …` mismatch — verifier output, NOT the
-  spec answer, so it's sound and generalizes) back into the next synthesis attempt (`last_error` →
-  `synthesize(feedback=…)`). Overfit: no soundness risk (petanque is ground truth, postcondition
-  pinned); the measurement caveat is that `loop_easy` targets are twins of golds, so its number is
-  an in-distribution dev metric — keep a cold held-out target for a generalization read.
-- **CFG-DERIVED LOOP TIMING (the real synthesis win).** The loop-arm timing is no longer guessed
-  by the model — `cfg.loop_timing(header)` SUMS the per-instruction constants (`mnemonic → t<op>`,
-  shifts → `tslli n`, branches → `tt/tf<op>` by which edge stays in the loop) over the natural loop
-  body and the straight-line prefix. Unit-tested to reproduce the vendored gold timing EXACTLY for
-  addloop / ct_swap / find_in_array (`tests/test_cfg.py`). `skeleton_plan` injects the computed
-  `cycle_count_of_trace t' = <prefix> + (<counter>) * (<body>)` into the loop hole as authoritative
-  GUIDANCE (the model uses those exact timing terms and supplies only the counter + data facts),
-  but keeps the arm free-form. NOTE/lesson: a first version *forced* a rigid
-  `FILL_FACTS /\ … (COUNTER) …` template — it made timing exact but **regressed addloop_llm**,
-  because gold-script reuse needs byte-exact arm structure and the template changed it. Guidance,
-  not a template, is the right call: timing correct AND the model can still match a discharge shape.
-- **Ablation metric (isolates synthesis from discharge):** `prove <t> --ablate-gold-proof <gold>`
-  synthesizes `<t>`'s invariant but discharges with `<gold>`'s gold proof — closes iff the invariant
-  matches the gold. Result: ct_swap_llm / find_in_array_llm now REACH the gold-proof discharge
-  (iters>0, was exhausting at synthesis) but still fail — the wall is now **structural exactness**:
-  the synthesized fact conjuncts (order/count, `exists` nesting) don't match the rigid positional
-  `destruct PRE as (a & b & …)` in the gold proofs, and find_in_array's extra `0x204` join arm
-  changes `destruct_inv`'s goal count. So: timing solved; the next wall is structural-match-for-reuse
-  (robust-to-ordering discharge, or canonical-structure synthesis), NOT timing or precision.
-- **Remaining loop gaps are STRUCTURAL, not precision** (verifier feedback fixed the precision part):
-  - `find_in_array_llm`: the CFG cuts a join arm at `0x204` that gold deliberately doesn't (it
-    folds both branches into the `0x208` postcondition disjunction), so the skeleton can't match
-    find_in_array's gold script; and the proof needs the program-specific `key_in_array_dec` case
-    split no generic driver does. (CFG join detection helps uxListRemove but over-cuts here.)
-  - `ct_swap_llm`: gold's loop arm is `exists index, …`; the model proposes a pointer-difference
-    `(s R_A3 - s R_A2)` index, which neither proves directly nor matches ct_swap's gold script.
-  - `uxListRemove_llm`'s `0x80002460` join needs the noverlaps branch proof.
-- `vListInsert` (the cyclic-list search loop, ~15 expert-hours) — the loop stretch target.
+The change set is four coordinated edits, in dependency order — ALL DONE:
+1. **Driver timeout** (DONE) — per-tactic timeout in `PetanqueDriver.run` (`agent.tactic_timeout_s`,
+   native int seconds + client thread guard); a hung `repeat step`/`psimpl` is a skipped rung.
+2. **theorem_builder scope + prelude** (DONE) — `render(proof_body=None)` emits the functor-scoped
+   theorem + `PRELUDE_LINES` (`Local Ltac step` … `destruct_inv {addr_width} PRE`) as an OPEN proof;
+   `start` succeeds and reaches the fan-out. Filename bug fixed.
+3. **Ladder** (DONE) — `hammer.py LADDER` carries `now step.` + the `repeat step; …` workhorses
+   ahead of the generic closers; each rung bounded by the per-tactic timeout.
+4. **DFS `_discharge`** (DONE) — `Orchestrator._discharge` is now a stack-based backtracking search
+   over petanque states (`_SearchNode` = state + tactic-path + depth; `_RunCounter` bounds total
+   `driver.run`; `visited` by `_goal_hash`). A node is solved iff `state.finished` (petanque holds
+   the multi-subgoal conjunction). Hammer-first at every node; the deterministic structural prelude
+   + proof-library run at the ROOT (advancing to the post-`destruct_inv` fan-out), LLM repair with
+   per-goal `past_failures` deeper. Budgets: `search_max_depth`/`search_max_runs`/`max_iterations`
+   (LLM-call cap). Stale handles fall back to `replay_from_root`. `prove()` + the gold path are
+   unchanged (gold returns before `_discharge`).
 
-### The real next capability: an LLM proof-search agent (path to data-structure loops)
-Incremental synthesis/discharge tweaks have plateaued — the ablation shows the wall is **proof
-discharge of data-structure loops**, which need *bespoke* ITP, not invariant synthesis: every
-vendored search loop (find_in_array / find_in_array_opt / find_in_list) requires a program-specific
-**decidability case-split** (`key_in_array_dec`, `key_in_linked_list_dec`) to prove the
-found/not-found WCET disjunction, ct_swap needs an `exists`-index witness, uxListRemove needs
-`noverlaps`/`getmem_noverlap`. None of these is genericizable, and there is **no remaining generic
-("simple") loop in this RISC-V corpus to gain** — so more `try_structured` / prompt work is not
-load-bearing (see `docs/RESULTS.md` for the evidence). The honest next step is a different tool:
+See `docs/cloq-agent-backtracking-tasks.md` for the copy-pasteable Claude Code task series.
 
-- **An LLM proof-search agent** — multi-step, backtracking, operating on the live goal *state*
-  (not one-shot tactic repair), able to *discover* moves like `destruct (key_in_array_dec …)`,
-  `exists (1 + i)`, and the case-specific reasoning. This is the only thing that cracks the
-  data-structure loops; budget it as a real sub-project (days), keep the soundness boundary
-  (petanque is ground truth; postcondition pinned), and reuse the existing skill library + RAG.
-- **Pair it with a held-out generalization target** (a loop whose gold is withheld from the proof
-  library and few-shot) so the metric measures capability, not recall — today's `_llm` numbers are
-  in-distribution (addloop_llm closes by reusing addloop's own gold proof).
-- Optionally **broaden the corpus to where mechanical still works** (e.g. the x86 `sum` accumulate
-  loop — no early exit, no decidability), which needs the AMD64 timing pipeline (a separate lift).
+Smoke-path prereqs — RESOLVED (Task 3):
+- `driver.start` now succeeds on the generated `.v` (the "startof not found" scope error is
+  gone): `render(proof_body=None)` emits the functor-scoped theorem + the deterministic
+  Picinae prelude, and probing confirms `start` → prelude → `destruct_inv 32 PRE` reaches
+  2 subgoals for addloop. The prelude lives in `theorem_builder.PRELUDE_LINES` (open proof:
+  no Qed, no functor `End` — an unfinished proof can't be followed by `End ..._Proof.`; the
+  search drives it to Qed). A closed `proof_body=<script ending in Qed.>` re-enables the
+  functor `End` + concrete-CPU instantiation suffix.
+- Filename bug fixed: `build_spec(name=...)` is now required and no longer falls back to
+  `lifted_program`, so addloop renders to `Addloop_gen.v` (was `Lifted_prog_gen.v`).
 
-## Gotchas / key facts (still true)
-- The vendored Cloq tactic is **`hammer`**, NOT `whammer` — that name does not exist in this
-  vendored copy. (`docs/SPEC.md`/`README.md` still say `whammer`; the code/ladder uses `hammer`.)
-  Drive automation through `proof/hammer.py`, not by hardcoding a tactic name.
-- `_CoqProject` uses `-R ../vendor/picinae Picinae` plus `-I` for the riscv/examples/array dirs.
-- addloop real lifted addresses: **0x8 entry / 0x20 exit** (not 0x0/0x10). `destruct_inv 32` in the
-  gold proof is the 0x20 exit.
-- Container mounts: `..:/app` and `../proofs:/work/proofs`; `workspace=/work/proofs`
-  (`CLOQ_PETANQUE_WORKSPACE`). `src` is bind-mounted, so Python edits are live (clear `__pycache__`
-  if stale). The generated `.v` is regenerated every run.
-- Soundness rule for any change touching the theorem/invariant: the model may fill **invariant
-  arms only**; the **postcondition is pinned from the trusted spec** and addresses/match structure
-  come from the CFG. Never let model output widen or weaken the claim.
+## Architecture decision: backtracking proof search
+- **Why DFS+backtracking, not greedy repair.** The old `_discharge` reads only `cur.goals[0]`,
+  commits to the first tactic that returns `ok` (which only means "applied without error",
+  not "made progress"), discards the prior state, and abandons the whole proof on any dead
+  end. `destruct_inv` always applies cleanly, so it is always taken, the pre-split state is
+  lost, and there is no way back. Closest published analogue is COPRA (stack-based
+  backtracking search + retrieval + a past-failure dictionary); backtracking's payoff is
+  largest on the harder, branching proofs — exactly our regime.
+- **A search node = a petanque state.** The state carries the full goal stack, so the
+  multi-subgoal fan-out is handled for free: success is `state.finished`; a `destruct_inv`
+  just yields a child with more open goals.
+- **Picinae tactics are opaque to the search.** The searcher never interprets `destruct_inv`
+  or `preserve_noverlaps`; it runs the string and lets Rocq adjudicate. Domain-specificity
+  lives in (a) the deterministic prelude, (b) the ladder, (c) RAG over vendored proofs — not
+  in the search algorithm.
+- **Upgrade path (later):** swap the DFS stack for a best-first priority queue once a cheap
+  value signal exists (subgoal-count delta, or "ladder closed ≥1 subgoal"). Keep DFS default.
 
-## Conventions
-- Reuse the proof-engine stack wholesale; write only glue. Don't reimplement petanque, hammer, RAG.
-- Hammer-first, LLM-fallback. Never call the model where the ladder would close the goal.
-- Every solved proof goes back into the RAG corpus. Keep that write-back intact.
-- Keep budgets (invariant attempts, repair iterations, tokens) — they bound cost and runaway loops.
-- Don't edit `vendor/picinae/`. If you need a vendored definition, instantiate/import it.
-- After any change: `prove addloop` must still close end-to-end, and `pytest tests/` must pass.
+## Picinae tactic vocabulary (what the proofs actually require)
+Grounded in `vendor/picinae/timing/examples/FreeRTOS/list/*.v`. Tiers:
+- **T1 — structural prelude (identical every proof, deterministic, NOT LLM-discovered):**
+  `apply prove_invs`; the setup block (`eapply startof_prefix in ENTRY`;
+  `eapply preservation_exec_prog in MDL … apply lift_riscv_welltyped`; `clear -` + renames);
+  then `destruct_inv W PRE` (W = address width, 32 for RV32). `destruct_inv` is THE
+  case-split — one subgoal per invariant program point.
+- **T2 — workhorse:** `Local Ltac step := tstep r5_step.` (step is rebound per proof!), then
+  `repeat step; psimpl; hammer` (morally `whammer`). `step` is undefined without the binding.
+- **T3 — per-branch fan-out:** entry closes with `now step`; straight segments with
+  `repeat step. hammer.`; branch points open taken/not-taken subgoals (a `BC` hypothesis
+  appears) discharged in `{ … }` focus blocks; vanilla `destruct PRE as (...)` unpacks the
+  invariant conjunction.
+- **T4 — memory-aliasing residual closers (enter via RAG over vendored proofs):**
+  `preserve_noverlaps`, `unfold_noverlap`, `unfold_create_noverlaps`, `getmem_noverlap`,
+  `noverlap_symmetry`, `find_rewrites`, then `lia`.
+
+A stock Coq agent is helpless here: the load-bearing moves are Picinae-specific and `step`
+is bound at proof scope.
+
+## petanque state semantics (resolves the "many live states?" question)
+- `run(state, tac)` returns a NEW state; input handle is untouched; on Rocq error it returns
+  the SAME input state with `ok=False` (so a failed candidate naturally yields the parent).
+- Open question: does the server keep OLD states runnable after newer ones are produced?
+  Unconfirmed from source. **Resolution: store per node both the `state` handle AND the
+  tactic-path from root.** Try the handle; if it errors as stale, `replay_from_root(path)`
+  (fresh `start` + replay). Task 1 probes which mode the pinned pytanque supports.
+- **RESOLVED (Task 1, probed empirically): HANDLES STAY LIVE.** An OLD state handle is still
+  runnable after NEWER states are produced from the same parent in the same session
+  (`run(s0,_)->s1`, `run(s0,_)->s1b`, then `run(s1,_)` still `ok=True`). The DFS search MAY
+  therefore hold many live handles and does not need to replay by default.
+  `PetanqueDriver.replay_from_root(file, theorem, path)` exists as a defensive fallback for
+  the case a handle is ever rejected as stale. Probe lives as a skipped integration test in
+  `tests/test_petanque_state.py` (needs a running pet-server).
+
+## Key facts learned
+- `_CoqProject` uses `-R ../vendor/picinae Picinae` + `-I` for riscv/examples/array dirs.
+- Vendored Cloq tactic is `hammer` (NOT `whammer` — that name doesn't exist here).
+- addloop real addresses are 0x8 (entry) / 0x20 (exit), not 0x0/0x10 (the generated
+  invariant currently uses the wrong ones).
+- `theorem_builder.render` wraps the theorem in `Module {thm}_Proof (cpu …)` + `Module Inner
+  := TimingProof cpu. Import Inner.` AND (Task 3) emits the per-proof `Local Ltac step` +
+  deterministic Picinae prelude as the open proof body. Verified against pet-server: `start`
+  succeeds and the prelude reaches `destruct_inv 32 PRE` (2 subgoals) for addloop. The old
+  malformed `Admitted.`/`Qed.` default is gone (`proof_body=None` ⇒ open proof, no closer).
+- `TargetSpec.name` filename bug FIXED (Task 3): `build_spec(name=...)` is required and no
+  longer falls back to `lifted_program`; addloop → `Addloop_gen.v`.
+- agent mounts: `..:/app` and `../proofs:/work/proofs`; workspace `=/work/proofs`
+  (`CLOQ_PETANQUE_WORKSPACE`).
+- src is bind-mounted, so Python edits are live (clear `__pycache__` if stale); `.v`
+  regenerates each run.
+
+## Conventions / gotchas
+- Never spawn coqtop. Drive only through `petanque_driver.PetanqueDriver`.
+- pytanque's native `run(..., timeout=)` is INTEGER seconds — a float raises Coq "This number
+  is not an integer." The driver coerces (`max(1, int(round(budget)))`); the float budget only
+  drives the client-side thread guard.
+- Keep the gold-proof deterministic path (no LLM) working as the smoke regression.
+- Hammer-first, always: deterministic ladder before any LLM call.
+- Preserve `ProofResult` shape; record the winning tactic path in `proof_script`.
+- Every loop is budgeted (depth, driver.run calls, LLM calls). No unbounded search.
+- Don't break `pytest`; add tests with each change.

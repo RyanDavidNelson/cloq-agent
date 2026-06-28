@@ -55,7 +55,7 @@ def run_eval(cfg: Config, repo_root: Path, only: list[str] | None = None) -> Eva
     orch = Orchestrator(cfg)
     report = EvalReport()
 
-    with pet_driver(cfg.petanque) as d:
+    with pet_driver(cfg.petanque, default_timeout_s=cfg.agent.tactic_timeout_s) as d:
         for name, t in targets.items():
             if only and name not in only:
                 continue

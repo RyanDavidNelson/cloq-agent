@@ -11,7 +11,44 @@ from dataclasses import dataclass, field
 
 from .petanque_driver import PetanqueDriver, StepResult
 
+# Unpacking the invariant conjunction (PRE) ahead of stepping is the move the vendored LOOP arms
+# open with — `destruct PRE as [...]`. This generic-arity form peels each leading conjunct, keeping
+# the name PRE for the tail, and stops (via the bounded `repeat`) when PRE is no longer a `/\`.
+_PRE_UNPACK = "(try (repeat (destruct PRE as [? PRE])))"
+
+# The deterministic LOOP-arithmetic arm (CLAUDE.md T3/loop): unpack PRE, drive the instructions
+# (which branch the loop), then close the modular-counter obligations the generic ladder can't —
+# `rewrite msub_nowrap by (psimpl; lia)` (a ⊖ b that doesn't wrap) and `rewrite N_sub_distr; lia`
+# (distribute x - (a - b)), interleaved with split/assumption/lia/hammer. Mirrors the vendored
+# riscv_addloop loop arm. Wrapped in `try`s so it is safe on the branch where a rewrite doesn't fire.
+_LOOP_ARM = (
+    f"{_PRE_UNPACK}; repeat (tstep r5_step); "
+    "(try (rewrite msub_nowrap by (psimpl; lia))); "
+    "repeat split; (try assumption); (try reflexivity); (try lia); (try (psimpl; lia)); "
+    "(try (hammer; (try (rewrite N_sub_distr; lia)))); "
+    "(try (rewrite N_sub_distr; lia)); (try hammer)"
+)
+
+# NOTE on memory-aliasing (T4): a deterministic noverlap closer is NOT included here because its
+# load-bearing tactics — `preserve_noverlaps`, `unfold_noverlap` — are program-specific `Local Ltac`
+# defined *inside* each vendored proof body (they unfold THAT program's `memory_regions`/`noverlaps`
+# definitions). They are out of scope in our generated theorem, so any such rung would be a
+# try-skipped no-op. Real aliasing support needs `theorem_builder` to EMIT a program-specific
+# `unfold_noverlap`/`preserve_noverlaps` from the target's memory structure — tracked as future work.
+
+# Cheapest / most-bounded rung first. The `repeat step; …` workhorses (CLAUDE.md T2) drive the
+# remaining machine instructions then close the timing leaf, so they sit ahead of the generic
+# closers; `now step.` (entry-arm style) is the cheapest. The two LOOP rungs come last among the
+# step-driven ones: they are the most expensive (unpack + branch + modular-arith rewrites), so try
+# them only after the simpler workhorses miss. Each rung is bounded by the per-tactic timeout
+# (Task 2), so a hung `repeat step`/`psimpl` is just a skipped rung, not a stall.
 LADDER: list[str] = [
+    "now step.",                # entry / single-instruction arm
+    "repeat step; hammer.",     # workhorse: drive the arm, then the Cloq leaf closer
+    "repeat step; psimpl; hammer.",
+    "repeat step; psimpl; lia.",
+    f"now ({_LOOP_ARM}).",      # loop arm, single focused goal (modular-counter arithmetic)
+    f"all: ({_LOOP_ARM}).",     # loop arm applied across a whole taken/not-taken fan-out
     "hammer.",                  # Cloq leaf closer (was `whammer.` — that name does not exist)
     "psimpl; lia.",
     "lia.",
@@ -58,6 +95,15 @@ STRUCTURED_SCRIPTS: list[list[str]] = [
      *_INDUCTIVE_SETUP,
      "all: (repeat (tstep r5_step); repeat split; "
      "(try assumption); (try lia); (try (psimpl; lia)); (try hammer))."],
+    # LOOP arm: same setup, but discharge each arm with the modular-counter arithmetic closer
+    # (`msub_nowrap` / `N_sub_distr`) the generic `repeat step; hammer` can't. For targets whose
+    # inductive arms carry a loop-counter cycle equation (addloop-class). Tried last; fails fast
+    # and is skipped on targets it doesn't fit.
+    ["intros.", "apply prove_invs.",
+     "simpl. rewrite ENTRY. unfold entry_addr. repeat (tstep r5_step). "
+     "now (repeat split; (try assumption); (try reflexivity); (try (psimpl; lia)); (try hammer)).",
+     *_INDUCTIVE_SETUP,
+     f"all: ({_LOOP_ARM})."],
 ]
 
 
@@ -89,9 +135,13 @@ def try_ladder(
     driver: PetanqueDriver,
     state: object,
     ladder: list[str] | None = None,
+    timeout_s: float | None = None,
 ) -> HammerOutcome:
+    """Run the ladder rung-by-rung from `state`, returning the first rung that finishes the goal.
+    Each rung is bounded by the per-tactic timeout (`timeout_s`, else the driver default): a rung
+    that times out or errors comes back `ok=False`/not-finished and is simply skipped to the next."""
     for tac in ladder or LADDER:
-        res: StepResult = driver.run(state, tac)
+        res: StepResult = driver.run(state, tac, timeout_s)
         if res.ok and res.finished:
             return HammerOutcome(closed=True, tactic=tac, state=res.state)
     return HammerOutcome(closed=False, tactic=None, state=state)

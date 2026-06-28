@@ -82,8 +82,13 @@ def _extract_with_coqpyt(path: Path) -> list[Record] | None:
     return records
 
 
-def _solved_proof_records(proof_dir: Path) -> list[Record]:
-    """Index completed proofs (files containing Qed) as reusable analogues."""
+def _solved_proof_records(proof_dir: Path, *, max_chars: int = 4000) -> list[Record]:
+    """Index completed proofs (files containing Qed) as reusable analogues.
+
+    `max_chars` caps the indexed body. The default suits short solved targets; the vendored
+    example proofs need a larger cap because their T4 memory-aliasing closers
+    (getmem_noverlap etc.) sit deep in the proof body and a tight cut would hide them.
+    """
     records: list[Record] = []
     for p in proof_dir.rglob("*.v"):
         text = p.read_text(errors="ignore")
@@ -92,7 +97,7 @@ def _solved_proof_records(proof_dir: Path) -> list[Record]:
         records.append(
             Record(
                 id=f"solved::{p.name}",
-                text=text[:4000],
+                text=text[:max_chars],
                 kind="proof",
                 meta={"source": str(p)},
             )
@@ -114,6 +119,17 @@ def build_index(cfg: RagCfg, *, vendor: Path, proofs: Path, runs: Path | None = 
     records.extend(_solved_proof_records(Path(proofs)))
     if runs is not None and Path(runs).exists():
         records.extend(_solved_proof_records(Path(runs)))
+
+    # Vendored EXAMPLE proofs (timing/examples/**) are already swept by the decl-header pass
+    # above, but that only captures their Definition/Theorem *signatures*. The T4 memory-aliasing
+    # closers (preserve_noverlaps, getmem_noverlap, find_rewrites, noverlap_symmetry) live inside
+    # the proof BODIES, so index those bodies as reusable "proof" analogues too — otherwise they
+    # are never retrievable as prior-proof context for tactic repair.
+    examples = Path(vendor) / "timing" / "examples"
+    if examples.exists():
+        # Larger cap: the T4 closers sit deep in these proof bodies (e.g. getmem_noverlap past
+        # 4 KB in uxListRemove.v), so a tight cut would make them unretrievable.
+        records.extend(_solved_proof_records(examples, max_chars=12000))
 
     if records:
         vecs = embedder.embed([r.text for r in records])

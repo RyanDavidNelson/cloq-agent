@@ -19,3 +19,8 @@ fpga/**/vivado*.jou
 fpga/**/.Xil/
 *.elf
 *.bin
+
+# Local secrets / API keys — never commit (public repo)
+.env
+.env.*
+!.env.example

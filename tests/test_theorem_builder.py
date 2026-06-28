@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from cloq_agent.proof.theorem_builder import TargetSpec, render
+from cloq_agent.proof.theorem_builder import TargetSpec, render, write
 
 SPEC = TargetSpec(
     name="addloop",
@@ -39,9 +39,24 @@ def test_render_contains_theorem_and_invariant():
     assert "(T1: s R_T1 = y)" in src
     # Functor scoping (the fix for `startof not found`) is preserved.
     assert "Module addloop_timing_Proof (cpu : RVCPUTimingBehavior)." in src
-    # Default render leaves the proof admitted and closes with the concrete CPU instantiation.
-    assert "Admitted." in src
-    assert src.strip().endswith("Module addloop_timing_Concrete := addloop_timing_Proof addloop_timing_CPU.")
+    # Default render (proof_body=None) leaves the proof OPEN with the deterministic prelude:
+    # the per-proof `step` binding + Picinae setup + destruct_inv, and NO closer.
+    assert "Proof." in src
+    assert "Local Ltac step := tstep r5_step." in src
+    assert "apply prove_invs." in src
+    assert "simpl. rewrite ENTRY. unfold entry_addr. now step." in src
+    assert "eapply startof_prefix in ENTRY; try eassumption." in src
+    assert "eapply preservation_exec_prog in MDL; try eassumption; [idtac|apply lift_riscv_welltyped]." in src
+    assert "clear - ENTRY PRE MDL. rename t1 into t. rename s1 into s'." in src
+    assert "destruct_inv 32 PRE." in src
+    # No malformed/leaked closer in an open proof: no Admitted., no Qed., no functor End /
+    # concrete instantiation (an open proof cannot be followed by `End ..._Proof.`).
+    assert "Admitted." not in src
+    assert "Qed." not in src
+    assert "End addloop_timing_Proof." not in src
+    assert "addloop_timing_Concrete" not in src
+    # The open file ends on the prelude's last tactic.
+    assert src.strip().endswith("destruct_inv 32 PRE.")
 
 
 # A second, distinct program: different requires, program/automation modules, and an a0/a1
@@ -80,9 +95,34 @@ def test_render_second_program():
     assert "satisfies_all ctsel_prog (ctselect_timing_invs sel secret) ctsel_exits" in src
     # Functor wrapper preserved.
     assert "Module ctselect_timing_Proof (cpu : RVCPUTimingBehavior)." in src
-    # Proof is completed (Qed). The functor's `End ..._Proof.` necessarily follows, so the file
-    # cannot literally *end* in Qed without dropping the wrapper; assert the proof closes.
+    # A supplied (closed) proof_body emits the script, then the functor `End` + concrete-CPU
+    # instantiation. The proof closes (Qed) and the file ends on the concrete instantiation.
     assert "Qed." in src
+    assert "End ctselect_timing_Proof." in src
+    assert src.strip().endswith(
+        "Module ctselect_timing_Concrete := ctselect_timing_Proof ctselect_timing_CPU."
+    )
+    # The deterministic prelude is NOT injected when the caller supplies its own script.
+    assert "Local Ltac step := tstep r5_step." not in src
+
+
+def test_addr_width_parametrizes_destruct_inv():
+    """addr_width drives `destruct_inv {width} PRE` (default 32; e.g. 64 for RV64)."""
+    spec = TargetSpec(
+        name="w64", requires=["X"], lifted_program="p", entry_addr=0,
+        exit_point="e", theorem_name="w64_thm", params=[("x", "N")], addr_width=64,
+    )
+    src = render(spec, "Definition i (x:N) (t:trace) := True.", "i")
+    assert "destruct_inv 64 PRE." in src
+    assert "destruct_inv 32 PRE." not in src
+
+
+def test_open_proof_has_no_admitted_or_qed():
+    """The default open render must never leak Admitted./Qed. (the old malformed template
+    rendered `Admitted.` then a closer, an invalid proof)."""
+    src = render(SPEC, INV, "timing_invs")
+    assert "Admitted." not in src
+    assert "Qed." not in src
 
 
 def test_entry_hyps_emitted_after_register_ties():
@@ -166,6 +206,27 @@ def test_no_entry_hyps_by_default():
     """A spec without entry_hyps emits only the register-tie hypotheses (addloop back-compat)."""
     src = render(SPEC, INV, "timing_invs")
     assert "PTR_ALIGN" not in src and "LEN_VALID" not in src
+
+
+def test_build_spec_filename_uses_target_key_not_lifted_program(tmp_path):
+    """The generated filename comes from the target KEY (addloop -> Addloop_gen.v), not from
+    `lifted_program` (which produced the `Lifted_prog_gen.v` bug)."""
+    from eval.targets import build_spec
+
+    t = {
+        "requires": ["NEORV32", "RISCVTiming", "riscv_addloop_timing_proof"],
+        "lifted_program": "lifted_prog",
+        "entry_addr": "0x8",
+        "exit_point": "exits",
+        "theorem_name": "addloop_timing_gen",
+        "params": [["x", "N"], ["y", "N"]],
+    }
+    spec, *_ = build_spec(t, Path("/nonexistent"), name="addloop")
+    assert spec.name == "addloop"            # the target key, NOT "lifted_prog"
+    assert spec.lifted_program == "lifted_prog"
+
+    out = write(spec, render(spec, INV, "timing_invs"), tmp_path)
+    assert out.name == "Addloop_gen.v"
 
 
 def test_malformed_param_raises_naming_the_param():

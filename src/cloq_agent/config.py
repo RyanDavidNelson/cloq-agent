@@ -64,9 +64,21 @@ class AgentCfg:
     invariant_attempts: int = 12
     hammer_first: bool = True
     escalate_after: int = 16
+    # DFS proof-search budgets (orchestrator._discharge). max_iterations is repurposed as the
+    # LLM-call cap (propose() calls) inside the search; these bound the shape of the search tree.
+    search_max_depth: int = 40      # longest tactic path from the post-start root
+    search_max_runs: int = 600      # total driver.run calls across the whole search
+    # Ablation switch: when False, _discharge runs the deterministic layer only (ladder +
+    # structured prelude + proof library) and skips all LLM tactic-repair. Lets us measure what
+    # the LLM search layer actually adds over the deterministic scaffold. Default True (full search).
+    llm_repair_enabled: bool = True
     # "skeleton": CFG emits the match scaffold + addresses, model fills only the loop/entry
     # holes (postcondition pinned). "freeform": model emits the whole Definition. Kept for A/B.
     synthesis_mode: str = "skeleton"
+    # Per-tactic wall budget (seconds). A hung `repeat step`/`psimpl` is captured as a failed
+    # candidate (ok=False, parent state) instead of stalling the whole search. The DFS proof
+    # search fires many candidates per node, so each tactic MUST be bounded.
+    tactic_timeout_s: float = 20.0
 
 
 @dataclass
@@ -128,9 +140,27 @@ def _apply_env(cfg: Config) -> None:
                 setattr(sub, f.name, typed)
 
 
+def _apply_escalation_env(cfg: Config) -> None:
+    """Populate the (nested) escalation model from env vars so an API key never has to be written
+    into a committed config file. `_apply_env` only reaches one level deep, so the escalation
+    block is handled explicitly here. Set CLOQ_ESCALATION_BASE_URL / _NAME / _API_KEY (the key
+    falls back to the standard ANTHROPIC_API_KEY / OPENAI_API_KEY) to turn escalation on."""
+    esc = cfg.model.escalation
+    if "CLOQ_ESCALATION_BASE_URL" in os.environ:
+        esc.base_url = os.environ["CLOQ_ESCALATION_BASE_URL"]
+    if "CLOQ_ESCALATION_NAME" in os.environ:
+        esc.name = os.environ["CLOQ_ESCALATION_NAME"]
+    key = (os.environ.get("CLOQ_ESCALATION_API_KEY")
+           or os.environ.get("ANTHROPIC_API_KEY")
+           or os.environ.get("OPENAI_API_KEY"))
+    if key:
+        esc.api_key = key
+
+
 def load_config(path: str | os.PathLike | None = None) -> Config:
     src = Path(path) if path else DEFAULT_CONFIG
     data = yaml.safe_load(src.read_text()) if src.exists() else {}
     cfg = _build(Config, data or {})
     _apply_env(cfg)
+    _apply_escalation_env(cfg)
     return cfg

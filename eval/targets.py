@@ -64,10 +64,13 @@ _OPTIONAL_SPEC_FIELDS = (
 )
 
 
-def build_spec(t: dict, repo_root: Path, name: str | None = None):
+def build_spec(t: dict, repo_root: Path, name: str):
+    # `name` is the target KEY (e.g. "addloop"); it drives the generated filename
+    # (Addloop_gen.v). It must NOT fall back to `lifted_program` (that produced the
+    # `Lifted_prog_gen.v` filename bug — the program symbol is not the target key).
     overrides = {k: t[k] for k in _OPTIONAL_SPEC_FIELDS if k in t}
     spec = TargetSpec(
-        name=name or t["lifted_program"],
+        name=name,
         requires=t["requires"],
         lifted_program=t["lifted_program"],
         entry_addr=int(str(t["entry_addr"]), 0),   # accept 0x.. hex

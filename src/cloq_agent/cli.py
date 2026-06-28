@@ -79,7 +79,7 @@ def cmd_prove(args) -> int:
     # Reusable proof-skill library (gold proofs from the other targets), tried during discharge.
     proof_library = load_proof_library(cfg.eval.targets_file, exclude=args.target)
     orch = Orchestrator(cfg)
-    with pet_driver(cfg.petanque) as d:
+    with pet_driver(cfg.petanque, default_timeout_s=cfg.agent.tactic_timeout_s) as d:
         res = orch.prove(d, spec, cfg_description=cfg_desc,
                          secret_param=secret, gold_invariant=gold, gold_proof=gold_proof,
                          invariant_skeleton=skeleton, proof_library=proof_library)
