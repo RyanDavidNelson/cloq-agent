@@ -52,6 +52,13 @@ class TargetSpec:
     # so the soundness boundary (model fills invariant arms only) is preserved — they constrain the
     # theorem's inputs, they cannot widen or weaken the pinned postcondition.
     entry_hyps: list[tuple[str, str]] = field(default_factory=list)
+    # Extra universally-quantified binders that are NOT invariant arguments: (name, type, reg)
+    # triples. Each adds a `forall ... (name : type)` binder and a register entry hypothesis
+    # `(Reg: s reg = name)`, but is NOT passed to the invariant. Use this for call-ABI argument
+    # registers the timing invariant doesn't parameterize by (e.g. vListInsertEnd takes a second
+    # pointer in a1 that its vendored invariant ignores). They constrain inputs only, so the
+    # soundness boundary holds. inv_args stays driven solely by `params`.
+    extra_binders: list[tuple[str, str, str]] = field(default_factory=list)
     # The pinned exit-arm proposition for skeleton synthesis (the trusted WCET/ct claim). The
     # model never supplies this; it is spliced in verbatim. None disables skeleton synthesis.
     postcondition: str | None = None
@@ -142,8 +149,14 @@ def _entry_bindings(params: list[tuple[str, ...]]) -> list[tuple[str, str, str]]
     return [(_hyp_name(reg), reg, p[0]) for p, reg in zip(params, _DEFAULT_ENTRY_REGS)]
 
 
-def _entry_hyps_block(params: list[tuple[str, ...]], extra: list[tuple[str, str]]) -> str:
+def _entry_hyps_block(
+    params: list[tuple[str, ...]],
+    extra_binders: list[tuple[str, str, str]],
+    extra: list[tuple[str, str]],
+) -> str:
     bindings = _entry_bindings(params)
+    # extra_binders always carry an explicit register (name, type, reg) -> (hyp, reg, name).
+    bindings += [(_hyp_name(reg), reg, name) for name, _ty, reg in extra_binders]
     block = "".join(f"\n      ({name}: s {reg} = {pname})" for name, reg, pname in bindings)
     block += "".join(f"\n      ({name}: {prop})" for name, prop in extra)
     return block
@@ -156,6 +169,8 @@ def render(
     proof_body: str = "Admitted.",
 ) -> str:
     requires_block = "\n".join(f"Require Import {r}." for r in spec.requires)
+    # Binders = invariant params, then any extra (non-invariant) ABI-register binders.
+    binders = " ".join(b for b in (_binders(spec.params), _binders(spec.extra_binders)) if b)
     return PROOF_TEMPLATE.format(
         requires=requires_block,
         invariant=invariant_def.strip(),
@@ -166,8 +181,8 @@ def render(
         auto_module=spec.auto_module,
         cpu_module=spec.cpu_module,
         cpu_config=spec.cpu_config,
-        binders=_binders(spec.params),
-        entry_hyps=_entry_hyps_block(spec.params, spec.entry_hyps),
+        binders=binders,
+        entry_hyps=_entry_hyps_block(spec.params, spec.extra_binders, spec.entry_hyps),
         lifted_prog=spec.lifted_program,
         exits=spec.exit_point,
         inv_name=invariant_name,

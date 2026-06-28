@@ -10,8 +10,34 @@ from cloq_agent.lift.cfg import build_cfg, parse_objdump
 from cloq_agent.proof.theorem_builder import TargetSpec
 
 
+# Top-level keys in targets.yaml that are NOT targets (e.g. named eval groups).
+_RESERVED_KEYS = ("groups",)
+
+
 def load_targets(path: str | Path) -> dict[str, dict]:
-    return yaml.safe_load(Path(path).read_text())
+    raw = yaml.safe_load(Path(path).read_text())
+    return {k: v for k, v in raw.items() if k not in _RESERVED_KEYS}
+
+
+def load_groups(path: str | Path) -> dict[str, list[str]]:
+    """Named eval groups: group name -> list of target names (see `groups:` in targets.yaml)."""
+    raw = yaml.safe_load(Path(path).read_text())
+    return raw.get("groups", {}) or {}
+
+
+def resolve_selectors(path: str | Path, selectors: list[str] | None) -> list[str] | None:
+    """Expand a mix of group names and target names into a flat target-name list.
+
+    A selector that names a group expands to that group's targets; any other selector is taken
+    verbatim as a target name. None/empty means 'all targets' (run_eval treats None as no filter).
+    """
+    if not selectors:
+        return None
+    groups = load_groups(path)
+    out: list[str] = []
+    for s in selectors:
+        out.extend(groups[s]) if s in groups else out.append(s)
+    return out
 
 
 # Optional TargetSpec fields the theorem builder reads; absent ones keep their addloop
@@ -19,7 +45,7 @@ def load_targets(path: str | Path) -> dict[str, dict]:
 _OPTIONAL_SPEC_FIELDS = (
     "timing_functor", "timing_submodule", "program_module",
     "auto_module", "cpu_module", "cpu_config", "postcondition",
-    "entry_hyps",
+    "entry_hyps", "extra_binders",
 )
 
 

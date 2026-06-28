@@ -58,6 +58,43 @@ def test_invariant_points_for_addloop_fixture():
     assert 0x8 < loop_header < 0x20  # the header sits inside the body, between entry and exit
 
 
+# A function with a forward branch whose two arms rejoin before a later `ret` — exercises
+# join-point detection and the ret-as-exit fix (the straight-line exit bug + uxListRemove shape).
+_BRANCHY = """
+00000000 <f>:
+   0:\t00b50463 \tbne\ta0,a1,c <f+0xc>
+   4:\t00150513 \taddi\ta0,a0,1
+   8:\t00c0006f \tj\t10 <f+0x10>
+   c:\t00160613 \taddi\ta2,a2,1
+  10:\t00170693 \taddi\ta3,a3,1
+  14:\t00008067 \tret
+"""
+
+
+def test_join_point_and_ret_exit():
+    cfg = build_cfg(parse_objdump(_BRANCHY))
+    assert cfg.entry == 0x0
+    assert cfg.loop_headers == []           # forward branch only, no back-edge
+    assert cfg.join_points() == [0x10]      # the two arms rejoin at 0x10
+    assert cfg.exit_points() == [0x14]      # the `ret` address, not the entry/block-start
+    assert cfg.invariant_points() == [0x0, 0x10, 0x14]
+
+
+def test_straightline_exit_is_the_ret_address():
+    """A straight-line function (no branches) must report its `ret` as the exit, distinct from
+    the entry — the bug that previously made invariant_points = [entry] only."""
+    listing = """
+00000000 <g>:
+   0:\t00100513 \taddi\ta0,zero,1
+   4:\t00052023 \tsw\ta0,0(a0)
+   8:\t00008067 \tret
+"""
+    cfg = build_cfg(parse_objdump(listing))
+    assert cfg.entry == 0x0
+    assert cfg.exit_points() == [0x8]
+    assert cfg.invariant_points() == [0x0, 0x8]
+
+
 class _Spec:
     """Minimal spec stand-in: skeleton synthesis needs `params` + a pinned `postcondition`."""
     name = "addloop"

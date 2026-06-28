@@ -69,13 +69,25 @@ class CFG:
         return sorted({to for _, to in self.back_edges})
 
     def exit_points(self) -> list[int]:
-        """Terminal blocks (a `ret`/no-successor block) — the program's exit addresses."""
+        """Terminal blocks (a `ret`/no-successor block) — the program's exit addresses. With
+        returns made leaders, these block starts are the actual return-instruction addresses."""
         return sorted(s for s, b in self.blocks.items() if not b.succ)
 
+    def join_points(self) -> list[int]:
+        """Block starts with more than one predecessor (excluding the entry): control-flow merges
+        where a cut-point invariant is needed even though it is neither a loop header nor an exit
+        (e.g. the two arms of an `if` rejoining). Derived purely from the CFG, never the model."""
+        preds: dict[int, int] = {}
+        for b in self.blocks.values():
+            for t in b.succ:
+                if t is not None:
+                    preds[t] = preds.get(t, 0) + 1
+        return sorted(a for a, c in preds.items() if c > 1 and a != self.entry and a in self.blocks)
+
     def invariant_points(self) -> list[int]:
-        """Ordered, de-duplicated invariant-point addresses, derived purely from the CFG:
-        the entry, every loop header, and every exit. Never from the model."""
-        return sorted({self.entry, *self.loop_headers, *self.exit_points()})
+        """Ordered, de-duplicated invariant-point addresses, derived purely from the CFG: the
+        entry, every loop header, every control-flow join, and every exit. Never from the model."""
+        return sorted({self.entry, *self.loop_headers, *self.join_points(), *self.exit_points()})
 
     def skeleton_plan(self, spec) -> SkeletonPlan:
         """Build the invariant skeleton for `spec`. Requires `spec.postcondition` (the pinned
@@ -88,18 +100,26 @@ class CFG:
             )
         params = list(spec.params)
         loops = set(self.loop_headers)
+        joins = set(self.join_points())
         exits = self.exit_points()
-        # entry + loop headers are holes (the model's job); exits stay pinned.
-        hole_addrs = [a for a in dict.fromkeys([self.entry, *self.loop_headers]) if a not in exits]
+        # entry + loop headers + control-flow joins are holes (the model's job); exits stay pinned.
+        hole_addrs = [a for a in dict.fromkeys([self.entry, *self.loop_headers, *self.join_points()])
+                      if a not in exits]
 
         prompt_arms: list[tuple[int, str]] = []
         for a in hole_addrs:
-            kind = "loop invariant" if a in loops else "entry precondition"
-            prompt_arms.append((
-                a,
-                f"(* HOLE:0x{a:x} {kind}: registers + cycle_count_of_trace t' = "
-                f"closed form (c0 - c) * t_body + termination *) FILL_ME",
-            ))
+            if a in loops or a in joins:
+                kind = "loop invariant" if a in loops else "branch-join invariant"
+                hint = (f"(* HOLE:0x{a:x} {kind}: the register/memory facts that hold here, plus "
+                        f"cycle_count_of_trace t' = closed form (c0 - c) * t_body + termination *) FILL_ME")
+            else:
+                # The entry precondition is almost always just cycle_count = 0; extra register ties
+                # must be PROVABLE from the theorem's entry hypotheses, so over-specifying (e.g. a
+                # value for a callee-clobbered register) makes the base case unprovable.
+                hint = (f"(* HOLE:0x{a:x} entry precondition: normally exactly "
+                        f"`cycle_count_of_trace t' = 0`. Add a register tie ONLY if a later arm "
+                        f"needs it, and only one given as an entry hypothesis *) FILL_ME")
+            prompt_arms.append((a, hint))
         for a in exits:
             prompt_arms.append((
                 a,
@@ -170,7 +190,7 @@ def build_cfg(insns: list[Insn]) -> CFG:
     leaders = {addrs[0]}
     by_addr = {i.addr: i for i in insns}
 
-    # leaders: branch targets and instructions following a branch
+    # leaders: branch targets and instructions following a branch, plus terminal returns.
     for idx, ins in enumerate(insns):
         if ins.mnemonic in _BRANCH:
             tgt = _branch_target(ins.operands)
@@ -178,6 +198,11 @@ def build_cfg(insns: list[Insn]) -> CFG:
                 leaders.add(tgt)
             if idx + 1 < len(insns):
                 leaders.add(insns[idx + 1].addr)
+        # A return (ret/jalr) is the program's exit address. Make it a leader so it starts its
+        # own terminal (no-successor) block; otherwise a straight-line function is a single block
+        # whose "exit" would be reported as the entry address (no separate exit point).
+        if ins.mnemonic in ("ret", "jalr"):
+            leaders.add(ins.addr)
 
     leaders_sorted = sorted(leaders)
     blocks: dict[int, Block] = {ld: Block(start=ld) for ld in leaders_sorted}

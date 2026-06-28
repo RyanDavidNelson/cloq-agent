@@ -131,3 +131,182 @@ ct_swap_llm:
   # holes for the model. Mirrors the vendored 0x1f4 arm (time_of_ct_swap is in the imported scope).
   postcondition: "cycle_count_of_trace t' = tslli 2 + tsub + tadd + len * (ttbne + tlw + tlw + taddi + taddi + txor + tand + txor + tsw + tlw + txor + tsw + tjal) + tfbne + tjalr"
   gold_cycles: "17 + len * (42 + 5 * T_data_latency + 2 * T_inst_latency) + T_inst_latency"
+
+# ---------------------------------------------------------------------------
+# Task B — FreeRTOS list.c "easy four" (first WCET eval set, M2 exit criterion).
+# Four gold-labeled, mostly straight-line functions from the vendored FreeRTOS demo
+# (binary := RTOSDemo). vListInsert (the cyclic-list search loop) is deliberately EXCLUDED.
+# All take a List_t*/ListItem_t* in a0 (vListInsertEnd takes a second pointer in a1); the
+# vendored timing invariants parameterize only by (base_mem, a0), so a1 is added as a non-
+# invariant ABI binder via extra_binders. gold_cycles are the paper Fig. 5 measured WCET
+# (range in parens). NOTE: measured counts include CALLING_CONVENTION_CYCLES = 11 of call
+# overhead (caller's jal + callee's ret accounting) — an FPGA-oracle concern recorded now.
+# The straight-line three share an identical gold proof (YAML anchor); uxListRemove has an
+# extra branch invariant point (0x80002460) + memory-noverlap side conditions, so its gold
+# proof is bespoke. The hammer ladder cannot drive a top-level satisfies_all goal, so each
+# carries a gold_proof.
+# ---------------------------------------------------------------------------
+
+vListInitialise:
+  kind: wcet
+  description: "FreeRTOS vListInitialise: straight-line list-head init, entry + exit only."
+  requires: ["NEORV32", "RISCVTiming", "vListInitialise"]
+  lifted_program: lifted_prog
+  entry_addr: 0x8000239c
+  exit_point: exits
+  theorem_name: vListInitialise_timing_gen
+  program_module: Program_vListInitialise
+  auto_module: vListInitialiseAuto
+  params: [["base_mem", "memory"], ["a0", "N", "R_A0"]]
+  gold_invariant: ../vendor/picinae/timing/examples/FreeRTOS/list/vListInitialise.v
+  gold_proof: &straightline_gold_proof
+    - "intros."
+    - "apply prove_invs."
+    - "simpl. rewrite ENTRY. unfold entry_addr. now (tstep r5_step)."
+    - "intros."
+    - "eapply startof_prefix in ENTRY; try eassumption."
+    - "eapply preservation_exec_prog in MDL; try eassumption; [idtac|apply lift_riscv_welltyped]."
+    - "clear - ENTRY PRE MDL. rename t1 into t. rename s1 into s'."
+    - "destruct_inv 32 PRE."
+    - "repeat (tstep r5_step). hammer."
+  gold_cycles: 34   # Fig. 5 measured (range 29-42); includes CALLING_CONVENTION_CYCLES = 11
+
+vListInitialiseItem:
+  kind: wcet
+  description: "FreeRTOS vListInitialiseItem: straight-line list-item init (sw; ret), entry + exit only."
+  requires: ["NEORV32", "RISCVTiming", "vListInitialiseItem"]
+  lifted_program: lifted_prog
+  entry_addr: 0x800023bc
+  exit_point: exits
+  theorem_name: vListInitialiseItem_timing_gen
+  program_module: Program_vListInitialiseItem
+  auto_module: vListInitialiseItemAuto
+  params: [["base_mem", "memory"], ["a0", "N", "R_A0"]]
+  gold_invariant: ../vendor/picinae/timing/examples/FreeRTOS/list/vListInitialiseItem.v
+  gold_proof: *straightline_gold_proof
+  gold_cycles: 10   # Fig. 5 measured (range 9-14); includes CALLING_CONVENTION_CYCLES = 11
+
+vListInsertEnd:
+  kind: wcet
+  description: "FreeRTOS vListInsertEnd: straight-line append to list end, entry + exit only."
+  requires: ["NEORV32", "RISCVTiming", "vListInsertEnd"]
+  lifted_program: lifted_prog
+  entry_addr: 0x800023c4
+  exit_point: exits
+  theorem_name: vListInsertEnd_timing_gen
+  program_module: Program_vListInsertEnd
+  auto_module: vListInsertEndAuto
+  params: [["base_mem", "memory"], ["a0", "N", "R_A0"]]
+  # vListInsertEnd(List_t *pxList=a0, ListItem_t *pxNewListItem=a1). The vendored invariant
+  # ignores a1, so it is a non-invariant ABI binder (forall a1 + (A1: s R_A1 = a1)), not an inv arg.
+  extra_binders: [["a1", "N", "R_A1"]]
+  gold_invariant: ../vendor/picinae/timing/examples/FreeRTOS/list/vListInsertEnd.v
+  gold_proof: *straightline_gold_proof
+  gold_cycles: 54   # Fig. 5 measured (range 43-64); includes CALLING_CONVENTION_CYCLES = 11
+
+uxListRemove:
+  kind: wcet
+  description: "FreeRTOS uxListRemove: unlink an item; one branch (no loop), three invariant points."
+  requires: ["NEORV32", "RISCVTiming", "uxListRemove"]
+  lifted_program: lifted_prog
+  entry_addr: 0x80002440
+  exit_point: exits
+  theorem_name: uxListRemove_timing_gen
+  program_module: Program_uxListRemove
+  auto_module: uxListRemoveAuto
+  params: [["base_mem", "memory"], ["a0", "N", "R_A0"]]
+  # Memory-noverlap + memory-binding side conditions the proof needs (trusted, from the spec).
+  entry_hyps:
+    - ["NVL", "create_noverlaps (memory_regions base_mem a0)"]
+    - ["MEM", "s V_MEM32 = base_mem"]
+  gold_invariant: ../vendor/picinae/timing/examples/FreeRTOS/list/uxListRemove.v
+  gold_proof:
+    - "intros."
+    - "apply prove_invs."
+    - "simpl. rewrite ENTRY. unfold entry_addr. now (tstep r5_step)."
+    - "intros."
+    - "eapply startof_prefix in ENTRY; try eassumption."
+    - "eapply preservation_exec_prog in MDL; try eassumption; [idtac|apply lift_riscv_welltyped]."
+    - "clear - ENTRY PRE MDL. rename t1 into t. rename s1 into s'."
+    - "destruct_inv 32 PRE."
+    - "destruct PRE as (cycles & A0 & NVL & MEM)."
+    - "repeat (tstep r5_step)."
+    - "{ split. noverlaps_preserved ltac:(unfold noverlaps, memory_regions, pxNext, pxPrevious, pxContainer, pxIndex in *). hammer. unfold noverlaps, memory_regions, pxNext, pxPrevious, pxContainer, pxIndex in *. unfold_create_noverlaps. rewrite getmem_noverlap, getmem_noverlap in BC by (auto using noverlap_symmetry). find_rewrites. lia. }"
+    - "{ split. noverlaps_preserved ltac:(unfold noverlaps, memory_regions, pxNext, pxPrevious, pxContainer, pxIndex in *). hammer. unfold noverlaps, memory_regions, pxNext, pxPrevious, pxContainer, pxIndex in *. unfold_create_noverlaps. rewrite getmem_noverlap, getmem_noverlap in BC by (auto using noverlap_symmetry). find_rewrites. lia. }"
+    - "destruct PRE as (NVL & Cycles)."
+    - "repeat (tstep r5_step). hammer."
+  gold_cycles: 59   # Fig. 5 measured (range 48-72); includes CALLING_CONVENTION_CYCLES = 11
+
+# --- Synthesis twins (gold removed, objdump kept -> orchestrator must synthesize). These are
+# the measured eval set for the success-rate table. Freeform synthesis (no pinned postcondition)
+# so the model writes the whole invariant; the objdump gives a real instruction-level CFG prompt.
+
+vListInitialise_llm:
+  kind: wcet
+  description: "Synthesis twin of vListInitialise (no gold hints)."
+  requires: ["NEORV32", "RISCVTiming", "vListInitialise"]
+  lifted_program: lifted_prog
+  entry_addr: 0x8000239c
+  exit_point: exits
+  theorem_name: vListInitialise_timing_gen
+  program_module: Program_vListInitialise
+  auto_module: vListInitialiseAuto
+  params: [["base_mem", "memory"], ["a0", "N", "R_A0"]]
+  objdump: targets/vListInitialise.objdump
+  # Pinned exit arm (the trusted WCET claim); skeleton synthesis fills only the entry hole.
+  # time_of_vListInitialise is in the imported vendored functor scope.
+  postcondition: "time_of_vListInitialise t"
+
+vListInitialiseItem_llm:
+  kind: wcet
+  description: "Synthesis twin of vListInitialiseItem (no gold hints)."
+  requires: ["NEORV32", "RISCVTiming", "vListInitialiseItem"]
+  lifted_program: lifted_prog
+  entry_addr: 0x800023bc
+  exit_point: exits
+  theorem_name: vListInitialiseItem_timing_gen
+  program_module: Program_vListInitialiseItem
+  auto_module: vListInitialiseItemAuto
+  params: [["base_mem", "memory"], ["a0", "N", "R_A0"]]
+  objdump: targets/vListInitialiseItem.objdump
+  postcondition: "time_of_vListInitialiseItem t"
+
+vListInsertEnd_llm:
+  kind: wcet
+  description: "Synthesis twin of vListInsertEnd (no gold hints)."
+  requires: ["NEORV32", "RISCVTiming", "vListInsertEnd"]
+  lifted_program: lifted_prog
+  entry_addr: 0x800023c4
+  exit_point: exits
+  theorem_name: vListInsertEnd_timing_gen
+  program_module: Program_vListInsertEnd
+  auto_module: vListInsertEndAuto
+  params: [["base_mem", "memory"], ["a0", "N", "R_A0"]]
+  extra_binders: [["a1", "N", "R_A1"]]
+  objdump: targets/vListInsertEnd.objdump
+  postcondition: "time_of_vListInsertEnd t"
+
+uxListRemove_llm:
+  kind: wcet
+  description: "Synthesis twin of uxListRemove (no gold hints)."
+  requires: ["NEORV32", "RISCVTiming", "uxListRemove"]
+  lifted_program: lifted_prog
+  entry_addr: 0x80002440
+  exit_point: exits
+  theorem_name: uxListRemove_timing_gen
+  program_module: Program_uxListRemove
+  auto_module: uxListRemoveAuto
+  params: [["base_mem", "memory"], ["a0", "N", "R_A0"]]
+  entry_hyps:
+    - ["NVL", "create_noverlaps (memory_regions base_mem a0)"]
+    - ["MEM", "s V_MEM32 = base_mem"]
+  objdump: targets/uxListRemove.objdump
+  postcondition: "time_of_uxListRemove t base_mem a0"
+
+# Named eval groups (resolved by `cloq-agent eval <group>`); not targets themselves.
+groups:
+  list_easy_four:
+    - vListInitialise_llm
+    - vListInitialiseItem_llm
+    - vListInsertEnd_llm
+    - uxListRemove_llm

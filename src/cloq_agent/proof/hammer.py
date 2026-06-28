@@ -28,6 +28,46 @@ class HammerOutcome:
     state: object | None
 
 
+# The generic Cloq timing-proof skeleton. A timing proof's structure is isomorphic to the CFG and
+# is almost entirely mechanical: `apply prove_invs`, discharge the base case, set up the inductive
+# step, `destruct_inv`, then `repeat step; hammer` each invariant arm. The *only* creative input is
+# the invariant set (synthesized separately). These candidates differ only in how the entry-arm
+# (base case) and the per-arm goals are closed, covering straight-line and conjunctive/▵ invariants.
+# Tried from the fresh start state before spending LLM tokens on tactic repair.
+_INDUCTIVE_SETUP = [
+    "intros.",
+    "eapply startof_prefix in ENTRY; try eassumption.",
+    "eapply preservation_exec_prog in MDL; try eassumption; [idtac|apply lift_riscv_welltyped].",
+    "clear - ENTRY PRE MDL. rename t1 into t. rename s1 into s'.",
+    "destruct_inv 32 PRE.",
+]
+STRUCTURED_SCRIPTS: list[list[str]] = [
+    # Straight-line / simple entry arm: `now step` closes the base case.
+    ["intros.", "apply prove_invs.",
+     "simpl. rewrite ENTRY. unfold entry_addr. now (tstep r5_step).",
+     *_INDUCTIVE_SETUP,
+     "all: (repeat (tstep r5_step); hammer)."],
+    # Conjunctive entry arm (register ties etc.): split + assumption/arith before stepping arms.
+    ["intros.", "apply prove_invs.",
+     "simpl. rewrite ENTRY. unfold entry_addr. repeat (tstep r5_step). "
+     "now (repeat split; (try assumption); (try reflexivity); (try (psimpl; lia)); (try hammer)).",
+     *_INDUCTIVE_SETUP,
+     "all: (repeat (tstep r5_step); repeat split; "
+     "(try assumption); (try lia); (try (psimpl; lia)); (try hammer))."],
+]
+
+
+def try_structured(driver: PetanqueDriver, start_state: object) -> HammerOutcome:
+    """Try the generic structured Cloq proof from the fresh start state. Returns closed=True iff a
+    candidate finishes the whole `satisfies_all` goal. Petanque states are immutable, so each
+    candidate is run from the same `start_state`."""
+    for script in STRUCTURED_SCRIPTS:
+        outcome = run_script(driver, start_state, script)
+        if outcome.closed:
+            return outcome
+    return HammerOutcome(closed=False, tactic=None, state=start_state)
+
+
 def try_ladder(
     driver: PetanqueDriver,
     state: object,

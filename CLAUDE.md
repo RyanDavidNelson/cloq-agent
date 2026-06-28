@@ -80,6 +80,16 @@ vendor/picinae/          Picinæ + Cloq. READ-ONLY. Never edit; check its licens
   closed form in `len`/`index` only. So `secret_param: base_addr_b` (the a2 data pointer): it
   appears in the invariant yet no `cycle_count` arm depends on it (address-independence, the
   structural obligation `spec_lint` checks). ct_swap uses **R_A2/R_A3**, not addloop's R_T0/R_T1.
+- **Task B DONE (M2: FreeRTOS list.c "easy four").** Four gold WCET targets — `vListInitialise`,
+  `vListInitialiseItem`, `vListInsertEnd`, `uxListRemove` — all close via the gold path
+  (`llm_calls=0`), each reusing its vendored `FreeRTOS/list/<fn>.v` functor over the shared
+  `RTOSDemo` binary. Three are straight-line (entry+exit arms, shared gold proof via a YAML
+  anchor); `uxListRemove` has a branch (extra invariant point `0x80002460`) + memory-noverlap side
+  conditions and a bespoke gold proof. `vListInsert` (the cyclic-list search loop) is deliberately
+  EXCLUDED (separate stretch task). The four `<fn>_llm` synthesis twins form the eval group
+  `list_easy_four`: run `cloq-agent eval list_easy_four` for the success-rate table.
+  `theorem_builder` gained `extra_binders` (ABI registers the invariant ignores — e.g.
+  vListInsertEnd's a1 pointer — become forall binders + register hyps, not invariant args).
 - The earlier module-scope blocker (`The reference startof was not found`) is **fixed**: the
   generated theorem is stated *inside* a functor mirroring the vendored proof
   (`Module {thm}_Proof (cpu : RVCPUTimingBehavior). Module Inner := TimingProof cpu. Import Inner.`),
@@ -87,12 +97,29 @@ vendor/picinae/          Picinæ + Cloq. READ-ONLY. Never edit; check its licens
 - The `TargetSpec.name` bug is **fixed**: the generated file is now `Addloop_gen.v` (target key),
   not `Lifted_prog_gen.v`.
 
+- **Synthesis pipeline upgrades (took `eval list_easy_four` 0/4 → 3/4).** Five changes:
+  (1) the four list `_llm` twins run in **skeleton mode** (pinned exit arm `time_of_<fn> t`, CFG
+  supplies addresses/scaffold, model fills only entry/join holes); (2) `theorem_builder`/synth
+  **re-pin the freeform Definition signature** (`_force_signature`) so a spurious leading
+  `(p:addr)` binder can't under-apply `(inv_name args)`; (3) the orchestrator **feeds the previous
+  attempt's Rocq/lint error back** into the next `synthesize` call; (4) a **generic structured
+  proof driver** (`hammer.try_structured`: `apply prove_invs` + base case + `destruct_inv` +
+  `all: repeat step; hammer`) closes straight-line / single-branch goals with a correct invariant,
+  no LLM tactic-repair — this is what closes the three (`closing=structured`); (5)
+  `invariant_attempts` 4→12 (local LLM, cheap). The CFG also now reports the real **exit address**
+  (a `ret`/`jalr` is a leader) and **branch-join** invariant points.
+- `uxListRemove_llm` is still ❌: its `0x80002460` join arm needs the `noverlaps`/`getmem_noverlap`
+  branch reasoning, which the generic structured driver doesn't do. Closing it needs either a
+  noverlaps-aware structured candidate or LLM proof-repair that discovers the bespoke tactics.
+
 ## Next tasks
 - More constant-time / WCET targets following the two-phase pattern (gold baseline target, then a
   `<name>_llm` synthesis twin). Each new vendored program needs its `.vo` built in
-  `docker/Dockerfile.rocq` and an `-I` line in `proofs/_CoqProject` (see the ct_swap entries).
-- Improve skeleton synthesis so the model stops proposing `N`-illegal forms (e.g. `-1`, subtraction
-  underflow) and wrong loop-counter expressions — currently `ct_swap_llm` exhausts its attempts.
+  `docker/Dockerfile.rocq` and an `-I` line in `proofs/_CoqProject` (see the ct_swap / FreeRTOS
+  entries). Group `_llm` twins under `groups:` in targets.yaml for an eval slice.
+- **Get `uxListRemove_llm` (and `ct_swap_llm`) to green** — the remaining synthesis gaps are the
+  branchy/loop invariant *bodies* and the non-generic proof tactics, not the scaffold.
+- `vListInsert` (the cyclic-list search loop, ~15 expert-hours) — the loop stretch target.
 
 ## Gotchas / key facts (still true)
 - The vendored Cloq tactic is **`hammer`**, NOT `whammer` — that name does not exist in this

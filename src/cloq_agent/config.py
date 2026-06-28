@@ -59,7 +59,9 @@ class RagCfg:
 @dataclass
 class AgentCfg:
     max_iterations: int = 24
-    invariant_attempts: int = 4
+    # Local LLM, so attempts are cheap; give synthesis room to self-correct (esp. with the
+    # per-attempt error feedback loop in the orchestrator).
+    invariant_attempts: int = 12
     hammer_first: bool = True
     escalate_after: int = 16
     # "skeleton": CFG emits the match scaffold + addresses, model fills only the loop/entry

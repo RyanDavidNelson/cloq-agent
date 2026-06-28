@@ -31,7 +31,7 @@ rag:
 
 agent:
   max_iterations: 24        # LLM tactic-repair steps per proof before giving up
-  invariant_attempts: 4     # distinct invariant-set proposals to try
+  invariant_attempts: 12    # distinct invariant-set proposals to try (local LLM, attempts are cheap)
   hammer_first: true        # always try the cheap automation ladder before any LLM call
   escalate_after: 16        # switch to escalation model after this many failed iterations
   synthesis_mode: skeleton  # skeleton: CFG emits the match scaffold/addresses, model fills only

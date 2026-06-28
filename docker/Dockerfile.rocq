@@ -43,6 +43,23 @@ RUN eval $(opam env) \
         "$f" || exit 1; \
     done
 
+# FreeRTOS list.c "easy four" (Task B). RTOSDemo is the shared lifted binary; each list proof's
+# functor (TimingProof) is instantiated by the agent's generated theorem, so their .vo must exist.
+RUN eval $(opam env) \
+ && cd /work/vendor/picinae/timing/examples/FreeRTOS \
+ && coqc -R /work/vendor/picinae Picinae -I /work/vendor/picinae/timing/riscv \
+      -w -notation-overridden -w -deprecated-since-8.20 -w -overriding-logical-loadpath \
+      RTOSDemo.v \
+ && cd /work/vendor/picinae/timing/examples/FreeRTOS/list \
+ && for f in vListInitialise vListInitialiseItem vListInsertEnd uxListRemove; do \
+      coqc -R /work/vendor/picinae Picinae \
+        -I /work/vendor/picinae/timing/riscv \
+        -I /work/vendor/picinae/timing/examples/FreeRTOS \
+        -I /work/vendor/picinae/timing/examples/FreeRTOS/list \
+        -w -notation-overridden -w -deprecated-since-8.20 -w -overriding-logical-loadpath \
+        "$f.v" || exit 1; \
+    done
+
 COPY --chown=coq:coq proofs /work/proofs
 EXPOSE 8765
 # Launch petanque so pytanque can connect from the agent container. --root makes

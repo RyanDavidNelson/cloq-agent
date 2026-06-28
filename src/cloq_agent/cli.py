@@ -95,9 +95,14 @@ def cmd_doctor(args) -> int:
 
 def cmd_eval(args) -> int:
     from eval.harness import run_eval
+    from eval.targets import resolve_selectors
 
     cfg = load_config(args.config)
-    report = run_eval(cfg, _repo_root(), only=args.only)
+    # Positional selectors and --only both feed the filter; a selector may be a named group
+    # (e.g. `eval list_easy_four`) which expands to its targets, or a bare target name.
+    selectors = (args.selectors or []) + (args.only or [])
+    only = resolve_selectors(cfg.eval.targets_file, selectors)
+    report = run_eval(cfg, _repo_root(), only=only)
     console.print(report.render())
     return 0 if report.all_passed else 1
 
@@ -126,8 +131,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="override the invariant-synthesis mode for this run (default: config)")
     pp.set_defaults(func=cmd_prove)
 
-    pe = sub.add_parser("eval", help="run the eval harness over all targets")
-    pe.add_argument("--only", nargs="*", default=None, help="restrict to these target names")
+    pe = sub.add_parser("eval", help="run the eval harness over a group/targets (default: all)")
+    pe.add_argument("selectors", nargs="*", default=None,
+                    help="group name (e.g. list_easy_four) or target names; empty = all targets")
+    pe.add_argument("--only", nargs="*", default=None, help="additional target names to restrict to")
     pe.set_defaults(func=cmd_eval)
 
     args = p.parse_args(argv)

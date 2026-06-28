@@ -113,6 +113,32 @@ def test_entry_hyps_emitted_after_register_ties():
     assert src.index("(A2: s R_A2 = base_addr_b)") < src.index("(PTR_ALIGN:")
 
 
+def test_extra_binders_add_binder_and_reg_hyp_but_not_inv_arg():
+    """An ABI register the timing invariant ignores (e.g. vListInsertEnd's a1) becomes a
+    universally-quantified binder + register hypothesis, but is NOT passed to the invariant."""
+    spec = TargetSpec(
+        name="vListInsertEnd",
+        requires=["NEORV32", "RISCVTiming", "vListInsertEnd"],
+        lifted_program="lifted_prog",
+        entry_addr=0x800023c4,
+        exit_point="exits",
+        theorem_name="vListInsertEnd_timing_gen",
+        params=[("base_mem", "memory"), ("a0", "N", "R_A0")],
+        program_module="Program_vListInsertEnd",
+        auto_module="vListInsertEndAuto",
+        extra_binders=[("a1", "N", "R_A1")],
+    )
+    src = render(spec, "Definition vListInsertEnd_timing_invs (base_mem : memory) (a0 : N) (t:trace) := True.",
+                 "vListInsertEnd_timing_invs")
+    # a1 is a forall binder and gets a register hypothesis...
+    assert "(a1 : N)" in src
+    assert "(A1: s R_A1 = a1)" in src
+    assert "(A0: s R_A0 = a0)" in src
+    # ...but it is NOT an invariant argument (inv args stay base_mem a0).
+    assert "(vListInsertEnd_timing_invs base_mem a0)" in src
+    assert "vListInsertEnd_timing_invs base_mem a0 a1" not in src
+
+
 def test_no_entry_hyps_by_default():
     """A spec without entry_hyps emits only the register-tie hypotheses (addloop back-compat)."""
     src = render(SPEC, INV, "timing_invs")

@@ -1,0 +1,19 @@
+
+RTOSDemo.elf:     file format elf32-littleriscv
+
+Disassembly of section .text:
+
+80002440 <uxListRemove>:
+    80002440:	00452683          	lw	a3,4(a0)
+    80002444:	00852703          	lw	a4,8(a0)
+    80002448:	01052783          	lw	a5,16(a0)
+    8000244c:	00e6a423          	sw	a4,8(a3)
+    80002450:	00d72223          	sw	a3,4(a4)
+    80002454:	0047a683          	lw	a3,4(a5)
+    80002458:	00a69463          	bne	a3,a0,80002460 <uxListRemove+0x20>
+    8000245c:	00e7a223          	sw	a4,4(a5)
+    80002460:	00052823          	sw	zero,16(a0)
+    80002464:	0007a503          	lw	a0,0(a5)
+    80002468:	fff50513          	addi	a0,a0,-1
+    8000246c:	00a7a023          	sw	a0,0(a5)
+    80002470:	00008067          	jalr	zero,0(ra)

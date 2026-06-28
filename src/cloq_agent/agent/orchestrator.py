@@ -21,7 +21,7 @@ from ..config import Config
 from ..models import LLM
 from ..rag.retriever import Retriever
 from ..proof.petanque_driver import PetanqueDriver
-from ..proof.hammer import try_ladder, run_script
+from ..proof.hammer import try_ladder, try_structured, run_script
 from ..proof.theorem_builder import TargetSpec, render, write
 from . import invariant_synth, tactic_repair
 
@@ -80,6 +80,9 @@ class Orchestrator:
         t0 = time.time()
         llm_calls = 0
         escalated = False
+        # Carries the previous attempt's failure (Rocq/lint error) into the next synthesis call so
+        # the model can correct a concrete mistake instead of re-guessing blind.
+        last_error: str | None = None
 
         for attempt in range(1, self.cfg.agent.invariant_attempts + 1):
             if gold_invariant is not None and attempt == 1:
@@ -94,6 +97,7 @@ class Orchestrator:
                     self.llm, name=spec.name, entry=spec.entry_addr,
                     cfg_description=cfg_description, retrieved=retrieved, escalate=escalate,
                     mode=mode, skeleton=invariant_skeleton,
+                    params=spec.params, feedback=last_error,
                 )
                 llm_calls += 1
                 escalated = escalated or escalate
@@ -107,6 +111,7 @@ class Orchestrator:
                 if gold_invariant is not None:
                     return ProofResult(spec.name, False, attempt, 0, llm_calls, escalated,
                                        None, time.time() - t0, error=lint)
+                last_error = lint
                 continue
 
             source = render(spec, invariant_src, _inv_name(invariant_src))
@@ -116,6 +121,7 @@ class Orchestrator:
                 spec.theorem_name,
             )
             if not start.ok:
+                last_error = start.error
                 continue
 
             # Deterministic smoke path: run the gold proof script, no LLM.
@@ -138,6 +144,8 @@ class Orchestrator:
                         res.proved = False
                         res.error = f"FPGA disagreement: {report.summary}"
                 return res
+            # Discharge failed (invariant type-checked but the proof didn't close); feed that back.
+            last_error = res.error
 
         return ProofResult(spec.name, False, self.cfg.agent.invariant_attempts, 0,
                            llm_calls, escalated, None, time.time() - t0,
@@ -154,6 +162,15 @@ class Orchestrator:
             script.append(ladder.tactic or "")
             return ProofResult(spec.name, True, attempt, 0, llm_calls, escalated,
                                ladder.tactic, time.time() - t0, proof_script=script)
+
+        # Structured pass: the generic Cloq proof skeleton (prove_invs + step + hammer). With a
+        # correct invariant this closes straight-line / single-branch targets outright, before any
+        # LLM tactic repair. No llm_calls — it is fixed automation, not synthesis.
+        structured = try_structured(driver, state)
+        if structured.closed:
+            return ProofResult(spec.name, True, attempt, 0, llm_calls, escalated,
+                               "structured", time.time() - t0,
+                               proof_script=list(structured.tactic and [structured.tactic] or []))
 
         # iterative repair
         cur = driver._result(state, ok=True, error=None)  # refresh goals

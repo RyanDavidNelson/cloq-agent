@@ -40,8 +40,13 @@ Control-flow graph:
 {cfg}
 
 {context}
-
-Write the `Definition {inv_name} ...` invariant set for this target. Output only the Definition."""
+{feedback}
+Write the invariant set for this target. It MUST be exactly:
+  Definition {inv_name} {signature}(t:trace) := match t with (Addr a, s) :: t' => match a with
+  | <addr> => Some (<proposition>) | ... | _ => None end | _ => None end.
+Use exactly these binders ({signature}t:trace) and the name `{inv_name}` — do NOT add an
+address/program parameter. One arm per invariant point (entry, each loop header, each exit).
+Output only the Definition."""
 
 SYSTEM_SKELETON = """You are an expert in the Cloq timing-verification framework built on Picinae in Rocq/Coq.
 You are given a timing-invariant skeleton whose match structure, invariant-point addresses, and
@@ -66,7 +71,7 @@ Skeleton to complete (keep all addresses and the PINNED arm exactly as given):
 {skeleton}
 
 {context}
-
+{feedback}
 Return the completed Definition with every hole filled."""
 
 _DEF_RE = re.compile(r"(Definition\b.*?\.\s*$)", re.DOTALL | re.MULTILINE)
@@ -78,6 +83,31 @@ def _clean(text: str) -> str:
     text = re.sub(r"```[a-zA-Z]*", "", text).replace("```", "").strip()
     m = _DEF_RE.search(text)
     return (m.group(1) if m else text).strip()
+
+
+def _binders(params) -> str:
+    """`(name : type) ...` for the spec params (trailing space if non-empty)."""
+    s = " ".join(f"({p[0]} : {p[1]})" for p in (params or []))
+    return (s + " ") if s else ""
+
+
+# Header up to and including `(t:trace) [: <ret>] :=`, so we can re-pin it to the spec signature.
+_HEADER_RE = re.compile(
+    r"Definition\s+.*?\(\s*t\s*:\s*trace\s*\)\s*(?::\s*[^:=]*?)?:=", re.DOTALL
+)
+
+
+def _force_signature(text: str, inv_name: str, params) -> str:
+    """Rewrite the model's `Definition <name> <binders> (t:trace) [: ..] :=` header to the spec's
+    canonical name + binder list, dropping any spurious leading binder (e.g. `(p:addr)`) the model
+    added. The arm bodies are untouched. This is the freeform-mode fix for invariants that were
+    semantically right but mechanically rejected because the rendered `(inv_name args)` application
+    didn't match the declared arity. If the header can't be located, the text is returned as-is."""
+    if not params:
+        return text
+    header = f"Definition {inv_name} {_binders(params)}(t:trace) :="
+    new, n = _HEADER_RE.subn(header, text, count=1)
+    return new if n else text
 
 
 def _norm(s: str) -> str:
@@ -125,6 +155,16 @@ def _splice_skeleton(plan: SkeletonPlan, model_text: str) -> str | None:
     return plan.fill(fills)
 
 
+def _feedback_block(feedback: str | None) -> str:
+    """Render the previous attempt's failure (Rocq/lint error) as a corrective prompt segment."""
+    if not feedback:
+        return ""
+    return (
+        "\nYOUR PREVIOUS ATTEMPT FAILED. Fix it. The proof engine reported:\n"
+        f"{feedback.strip()[:600]}\n"
+    )
+
+
 def synthesize(
     llm: LLM,
     *,
@@ -137,11 +177,14 @@ def synthesize(
     temperature: float = 0.4,
     mode: str = "freeform",
     skeleton: SkeletonPlan | None = None,
+    params=None,
+    feedback: str | None = None,
 ) -> str:
     if mode == "skeleton" and skeleton is not None:
         user = USER_SKELETON.format(
             name=name, entry=entry, cfg=cfg_description,
             skeleton=skeleton.prompt_text, context=retrieved.as_prompt_context(),
+            feedback=_feedback_block(feedback),
         )
         out = llm.complete(SYSTEM_SKELETON, user, escalate=escalate, temperature=temperature)
         spliced = _splice_skeleton(skeleton, _clean(out.text))
@@ -155,6 +198,10 @@ def synthesize(
         cfg=cfg_description,
         context=retrieved.as_prompt_context(),
         inv_name=inv_name,
+        signature=_binders(params),
+        feedback=_feedback_block(feedback),
     )
     out = llm.complete(SYSTEM, user, escalate=escalate, temperature=temperature)
-    return _clean(out.text)
+    # Re-pin the header to the spec signature so a spurious leading binder (the common `(p:addr)`
+    # failure) can't under-apply the rendered `(inv_name args)`.
+    return _force_signature(_clean(out.text), inv_name, params)

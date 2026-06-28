@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from cloq_agent.lift.cfg import build_cfg, parse_objdump
-from cloq_agent.agent.invariant_synth import _splice_skeleton
+from cloq_agent.agent.invariant_synth import _splice_skeleton, _force_signature
 
 _ADDLOOP_OBJDUMP = Path(__file__).resolve().parents[1] / "eval" / "targets" / "addloop.objdump"
 
@@ -60,3 +60,36 @@ def test_splice_rejects_a_changed_address():
     plan = _plan()
     tampered = _MODEL_WITH_ECHOED_COMMENT.replace("| 0x10 =>", "| 0x14 =>")
     assert _splice_skeleton(plan, tampered) is None
+
+
+# --- freeform signature reconciliation (#2): drop a spurious leading binder, re-pin name + params.
+
+_PARAMS = [("base_mem", "memory"), ("a0", "N")]
+
+
+def test_force_signature_drops_spurious_address_binder():
+    # The exact freeform failure mode: model adds a leading (p:addr) and an `: option Prop`, so the
+    # rendered `(timing_invs base_mem a0)` is under-applied. Reconciliation fixes the header.
+    bad = ("Definition timing_invs (p:addr) (base_mem : memory) (a0 : N) (t:trace) : option Prop :=\n"
+           "match t with (Addr a, s) :: t' => match a with\n"
+           "| 0x800023c4 => Some (cycle_count_of_trace t' = 0)\n"
+           "| _ => None end | _ => None end.")
+    out = _force_signature(bad, "timing_invs", _PARAMS)
+    assert out.startswith("Definition timing_invs (base_mem : memory) (a0 : N) (t:trace) :=")
+    assert "(p:addr)" not in out
+    assert ": option Prop" not in out
+    # Arm bodies are untouched.
+    assert "0x800023c4 => Some (cycle_count_of_trace t' = 0)" in out
+
+
+def test_force_signature_renames_to_canonical_and_keeps_body():
+    bad = ("Definition foo (base_mem : memory) (a0 : N) (t:trace) :=\n"
+           "match t with (Addr a, s) :: t' => match a with | 0x8 => Some (cycle_count_of_trace t' = 0) | _ => None end | _ => None end.")
+    out = _force_signature(bad, "timing_invs", _PARAMS)
+    assert out.startswith("Definition timing_invs (base_mem : memory) (a0 : N) (t:trace) :=")
+    assert "0x8 => Some (cycle_count_of_trace t' = 0)" in out
+
+
+def test_force_signature_noop_without_params():
+    txt = "Definition timing_invs (p:addr) (t:trace) := whatever."
+    assert _force_signature(txt, "timing_invs", None) == txt
