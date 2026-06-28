@@ -95,6 +95,37 @@ def test_straightline_exit_is_the_ret_address():
     assert cfg.invariant_points() == [0x0, 0x8]
 
 
+_TARGETS = Path(__file__).resolve().parents[1] / "eval" / "targets"
+
+
+def _timing(fixture, header):
+    cfg = build_cfg(parse_objdump((_TARGETS / fixture).read_text()))
+    return cfg.loop_timing(header)
+
+
+def test_loop_timing_matches_gold_addloop():
+    # The derived (prefix, body) must reproduce the vendored gold loop arm exactly — the timing is
+    # summed from the CFG instructions, not guessed.
+    assert _timing("addloop.objdump", 0x10) == (
+        "tori + tandi", "tfbeq + taddi + tsub + ttbeq")
+
+
+def test_loop_timing_matches_gold_ct_swap():
+    assert _timing("ct_swap.objdump", 0x1f0) == (
+        "tslli 2 + tsub + tadd",
+        "ttbne + tlw + tlw + taddi + taddi + txor + tand + txor + tsw + tlw + txor + tsw + tjal")
+
+
+def test_loop_timing_matches_gold_find_in_array():
+    assert _timing("find_in_array.objdump", 0x1e8) == (
+        "taddi", "tfbgeu + tslli 2 + tadd + tlw + tfbeq + taddi + tjal")
+
+
+def test_loop_timing_none_for_non_header():
+    # Straight-line / non-loop addresses have no loop timing.
+    assert _timing("vListInitialise.objdump", 0x8000239c) is None
+
+
 class _Spec:
     """Minimal spec stand-in: skeleton synthesis needs `params` + a pinned `postcondition`."""
     name = "addloop"

@@ -29,9 +29,10 @@ match t with (Addr a, s) :: t' => match a with
             s R_A2 = len /\ 4 * len <= 2^32 - 1 /\
             cycle_count_of_trace t' = 0)
 | 0x1e8 => Some (s R_A5 <= len /\
-        cycle_count_of_trace t' = tfbgeu + taddi + (s R_A5) * (taddi + tlw + taddi + ttbeq))
-| 0x204 => Some (s R_A5 <= len /\
-        cycle_count_of_trace t' = tfbgeu + taddi + (s R_A5) * (taddi + tlw + taddi + ttbeq))
+        cycle_count_of_trace t' = taddi + (s R_A5) * (tfbgeu + tslli 2 + tadd + tlw + tfbeq + taddi + tjal))
+| 0x204 => Some (s V_MEM32 = base_mem /\
+    s R_A0 = s R_A5 /\
+    cycle_count_of_trace t' = taddi + tjalr)
 | 0x208 => Some (timing_postcondition base_mem arr key len t)
 | _ => None
 end | _ => None end.

@@ -15,6 +15,37 @@ _INSN = re.compile(r"^\s*([0-9a-fA-F]+):\s+[0-9a-fA-F ]+\t(\S+)\s*(.*)$")
 _BRANCH = {"beq", "bne", "blt", "bge", "bltu", "bgeu", "beqz", "bnez", "j", "jal", "jalr", "ret"}
 _TARGET = re.compile(r"([0-9a-fA-F]+)\s*(?:<|$)")
 
+# RISC-V mnemonic -> Cloq per-instruction timing constant (see vendor/.../riscv/RISCVTiming.v).
+# The timing of one instruction is fixed by its opcode, so a block's cycle cost is the SUM of these
+# — derivable from the CFG, not guessed. Shifts carry the shift amount; conditional branches have a
+# taken (tt<op>) and a fall-through (tf<op>) form chosen by which edge stays in the loop.
+_TCONST = {
+    "lw": "tlw", "sw": "tsw", "addi": "taddi", "add": "tadd", "sub": "tsub",
+    "xor": "txor", "xori": "txori", "and": "tand", "andi": "tandi", "or": "tor", "ori": "tori",
+    "jal": "tjal", "j": "tjal", "jalr": "tjalr", "ret": "tjalr", "lui": "tlui", "auipc": "tauipc",
+    "mul": "tmul", "sll": "tsll", "slt": "tslt", "sltu": "tsltu",
+}
+_SHIFT = {"slli": "tslli", "srli": "tsrli", "srai": "tsrai"}
+_BRANCH_OPS = {"beq", "bne", "blt", "bge", "bltu", "bgeu"}
+
+
+def _shamt(operands: str) -> str:
+    last = operands.split(",")[-1].strip()
+    try:
+        return str(int(last, 0))
+    except ValueError:
+        return last
+
+
+def _insn_tconst(ins: "Insn", taken: bool | None) -> str | None:
+    """The Coq timing term for one instruction (None if it has no modeled cost)."""
+    m = ins.mnemonic
+    if m in _SHIFT:
+        return f"{_SHIFT[m]} {_shamt(ins.operands)}"
+    if m in _BRANCH_OPS:
+        return f"{'tt' if taken else 'tf'}{m}"
+    return _TCONST.get(m)
+
 
 @dataclass
 class Insn:
@@ -89,6 +120,62 @@ class CFG:
         entry, every loop header, every control-flow join, and every exit. Never from the model."""
         return sorted({self.entry, *self.loop_headers, *self.join_points(), *self.exit_points()})
 
+    def _preds(self) -> dict[int, list[int]]:
+        preds: dict[int, list[int]] = {s: [] for s in self.blocks}
+        for s, b in self.blocks.items():
+            for t in b.succ:
+                if t in preds:
+                    preds[t].append(s)
+        return preds
+
+    def _natural_loop(self, header: int) -> set[int]:
+        """Block starts of the natural loop(s) of `header`: header plus every block that can reach
+        a back-edge tail without passing through header. Pure CFG structure."""
+        preds = self._preds()
+        loop = {header}
+        stack = [s for s, t in self.back_edges if t == header]
+        while stack:
+            n = stack.pop()
+            if n not in loop:
+                loop.add(n)
+                stack.extend(preds.get(n, []))
+        return loop
+
+    def loop_timing(self, header: int) -> tuple[str, str] | None:
+        """Derive (prefix, body) Coq timing expressions for the loop at `header`, summed from the
+        per-instruction constants — so the loop arm's `cycle = prefix + counter * body` is exact by
+        construction, never guessed. `prefix` = straight-line instructions before the loop
+        (entry..header); `body` = one iteration (the loop blocks' instructions, branches resolved to
+        the in-loop edge). Returns None if `header` is not a loop header. Address order = the order
+        the gold invariants use, so the strings match the vendored proofs exactly."""
+        if header not in self.loop_headers:
+            return None
+        loop = self._natural_loop(header)
+
+        body: list[str] = []
+        loop_insns = sorted((i for s in loop for i in self.blocks[s].insns), key=lambda i: i.addr)
+        for ins in loop_insns:
+            taken = None
+            if ins.mnemonic in _BRANCH_OPS:
+                tgt = _branch_target(ins.operands)
+                taken = tgt in loop  # staying in the loop by TAKING the branch?
+            term = _insn_tconst(ins, taken)
+            if term:
+                body.append(term)
+
+        prefix: list[str] = []
+        all_insns = sorted((i for b in self.blocks.values() for i in b.insns), key=lambda i: i.addr)
+        for ins in all_insns:
+            if self.entry <= ins.addr < header:
+                taken = None
+                if ins.mnemonic in _BRANCH_OPS:
+                    taken = _branch_target(ins.operands) in loop
+                term = _insn_tconst(ins, taken)
+                if term:
+                    prefix.append(term)
+
+        return " + ".join(prefix), " + ".join(body)
+
     def skeleton_plan(self, spec) -> SkeletonPlan:
         """Build the invariant skeleton for `spec`. Requires `spec.postcondition` (the pinned
         exit arm); raises a clear error if it is missing rather than guessing the claim."""
@@ -108,10 +195,27 @@ class CFG:
 
         prompt_arms: list[tuple[int, str]] = []
         for a in hole_addrs:
-            if a in loops or a in joins:
-                kind = "loop invariant" if a in loops else "branch-join invariant"
-                hint = (f"(* HOLE:0x{a:x} {kind}: the register/memory facts that hold here, plus "
-                        f"cycle_count_of_trace t' = closed form (c0 - c) * t_body + termination *) FILL_ME")
+            if a in loops:
+                # The loop timing is COMPUTED from the CFG (sum of per-instruction constants), so
+                # the model never has to guess it. We give it as authoritative GUIDANCE but leave the
+                # arm free-form (a single FILL_ME) so the model can still shape the conjuncts/`exists`
+                # to whatever the discharge needs — forcing a rigid template breaks proof reuse.
+                tim = self.loop_timing(a)
+                if tim is not None:
+                    prefix, body = tim
+                    rhs = f"{prefix} + (<counter>) * ({body})" if prefix else f"(<counter>) * ({body})"
+                    hint = (
+                        f"(* HOLE:0x{a:x} loop invariant: the register/bound/memory facts that hold "
+                        f"here, AND `cycle_count_of_trace t' = {rhs}` where the pre-loop time and the "
+                        f"per-iteration body time are FIXED (shown); pick <counter> = the loop "
+                        f"counter, e.g. (s R_A5), or introduce an index `i` (exists i, ... i<=len "
+                        f"... = the pointer offset) and use i. *) FILL_ME")
+                else:
+                    hint = (f"(* HOLE:0x{a:x} loop invariant: facts that hold here, plus "
+                            f"cycle_count_of_trace t' = closed form *) FILL_ME")
+            elif a in joins:
+                hint = (f"(* HOLE:0x{a:x} branch-join invariant: the register/memory facts that hold "
+                        f"here, plus cycle_count_of_trace t' = closed form *) FILL_ME")
             else:
                 # The entry precondition is almost always just cycle_count = 0; extra register ties
                 # must be PROVABLE from the theorem's entry hypotheses, so over-specifying (e.g. a

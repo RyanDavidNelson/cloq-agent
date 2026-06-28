@@ -155,6 +155,25 @@ vendor/picinae/          Picinæ + Cloq. READ-ONLY. Never edit; check its licens
   `synthesize(feedback=…)`). Overfit: no soundness risk (petanque is ground truth, postcondition
   pinned); the measurement caveat is that `loop_easy` targets are twins of golds, so its number is
   an in-distribution dev metric — keep a cold held-out target for a generalization read.
+- **CFG-DERIVED LOOP TIMING (the real synthesis win).** The loop-arm timing is no longer guessed
+  by the model — `cfg.loop_timing(header)` SUMS the per-instruction constants (`mnemonic → t<op>`,
+  shifts → `tslli n`, branches → `tt/tf<op>` by which edge stays in the loop) over the natural loop
+  body and the straight-line prefix. Unit-tested to reproduce the vendored gold timing EXACTLY for
+  addloop / ct_swap / find_in_array (`tests/test_cfg.py`). `skeleton_plan` injects the computed
+  `cycle_count_of_trace t' = <prefix> + (<counter>) * (<body>)` into the loop hole as authoritative
+  GUIDANCE (the model uses those exact timing terms and supplies only the counter + data facts),
+  but keeps the arm free-form. NOTE/lesson: a first version *forced* a rigid
+  `FILL_FACTS /\ … (COUNTER) …` template — it made timing exact but **regressed addloop_llm**,
+  because gold-script reuse needs byte-exact arm structure and the template changed it. Guidance,
+  not a template, is the right call: timing correct AND the model can still match a discharge shape.
+- **Ablation metric (isolates synthesis from discharge):** `prove <t> --ablate-gold-proof <gold>`
+  synthesizes `<t>`'s invariant but discharges with `<gold>`'s gold proof — closes iff the invariant
+  matches the gold. Result: ct_swap_llm / find_in_array_llm now REACH the gold-proof discharge
+  (iters>0, was exhausting at synthesis) but still fail — the wall is now **structural exactness**:
+  the synthesized fact conjuncts (order/count, `exists` nesting) don't match the rigid positional
+  `destruct PRE as (a & b & …)` in the gold proofs, and find_in_array's extra `0x204` join arm
+  changes `destruct_inv`'s goal count. So: timing solved; the next wall is structural-match-for-reuse
+  (robust-to-ordering discharge, or canonical-structure synthesis), NOT timing or precision.
 - **Remaining loop gaps are STRUCTURAL, not precision** (verifier feedback fixed the precision part):
   - `find_in_array_llm`: the CFG cuts a join arm at `0x204` that gold deliberately doesn't (it
     folds both branches into the `0x208` postcondition disjunction), so the skeleton can't match

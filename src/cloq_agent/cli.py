@@ -54,10 +54,21 @@ def cmd_prove(args) -> int:
         t, _repo_root(), name=args.target
     )
 
-    # Model preflight: only the synthesis path needs the LLM. If this target has no gold
-    # hints, fail loudly *now* if the model server is unreachable rather than mid-run.
-    on_gold_path = gold is not None or gold_proof is not None
-    if not on_gold_path:
+    # Ablation: SYNTHESIZE this target's invariant (no gold_invariant) but discharge with another
+    # target's gold proof. Isolates "is the synthesized invariant correct?" from "can we discharge
+    # it?" — if it reaches Qed, the invariant matches the gold structure and is correct.
+    if args.ablate_gold_proof:
+        if args.ablate_gold_proof not in targets:
+            console.print(f"[red]unknown ablation target '{args.ablate_gold_proof}'[/red]")
+            return 2
+        gold = None  # force synthesis
+        gold_proof = targets[args.ablate_gold_proof].get("gold_proof")
+        console.print(f"[cyan]ablation:[/cyan] synthesizing {args.target}, discharging with "
+                      f"{args.ablate_gold_proof}'s gold proof")
+
+    # Model preflight: the LLM is needed whenever we synthesize (no gold invariant). Fail loudly
+    # *now* if the model server is unreachable rather than mid-run.
+    if gold is None:
         from .models import LLM
         try:
             LLM(cfg.model).healthcheck()
@@ -131,6 +142,9 @@ def main(argv: list[str] | None = None) -> int:
     pp.add_argument("target")
     pp.add_argument("--synthesis-mode", choices=["skeleton", "freeform"], default=None,
                     help="override the invariant-synthesis mode for this run (default: config)")
+    pp.add_argument("--ablate-gold-proof", default=None, metavar="GOLD_TARGET",
+                    help="isolate synthesis: synthesize this target's invariant but discharge with "
+                         "GOLD_TARGET's gold proof (closes iff the invariant matches the gold)")
     pp.set_defaults(func=cmd_prove)
 
     pe = sub.add_parser("eval", help="run the eval harness over a group/targets (default: all)")

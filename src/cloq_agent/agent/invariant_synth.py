@@ -52,11 +52,12 @@ SYSTEM_SKELETON = """You are an expert in the Cloq timing-verification framework
 You are given a timing-invariant skeleton whose match structure, invariant-point addresses, and
 postcondition arm are FIXED. Your only job is to replace each `(* HOLE:0xADDR ... *) FILL_ME`
 placeholder with a Coq proposition:
-- for a loop header: the closed form for the cycles SO FAR, linear in the loop counter — the
-  register the loop body increments. It is `cycle_count_of_trace t' = pre + (counter_reg) * t_body`
-  where `t_body` is the SUM of the per-instruction times of ONE loop-body iteration and `pre` is
-  the straight-line time before the loop. Use `(s R_Ai)` for the counter (e.g. `s R_A5`), and
-  carry any register/bound facts the body needs (e.g. the counter <= length, memory preserved).
+- for a loop header: the cycle_count timing is COMPUTED for you and shown in the hole as
+  `cycle_count_of_trace t' = <pre> + (<counter>) * (<body>)` — USE those exact `<pre>`/`<body>`
+  timing terms (don't change them). Your job is the rest of the arm: pick `<counter>` (the register
+  the body increments, e.g. `(s R_A5)`, OR introduce an index with
+  `exists i, ... i <= len ... s R_A2 = base ⊕ (4*i) ...` when the counter is only a pointer), and
+  add the register/bound/memory facts that hold here (counter ≤ length, memory preserved, etc.).
 - for the entry: the precondition — almost always exactly `cycle_count_of_trace t' = 0` (add a
   register tie only if a later arm needs it and it is given as an entry hypothesis).
 Timing-constant rules (CRITICAL — wrong constants make the proof fail):
