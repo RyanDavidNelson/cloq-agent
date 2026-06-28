@@ -45,7 +45,7 @@ def cmd_prove(args) -> int:
         console.print(f"[red]unknown target '{args.target}'. known: {list(targets)}[/red]")
         return 2
     t = targets[args.target]
-    spec, cfg_desc, secret, gold, gold_proof = build_spec(t, _repo_root())
+    spec, cfg_desc, secret, gold, gold_proof = build_spec(t, _repo_root(), name=args.target)
     orch = Orchestrator(cfg)
     with pet_driver(cfg.petanque) as d:
         res = orch.prove(d, spec, cfg_description=cfg_desc,

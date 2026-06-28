@@ -10,23 +10,35 @@ Picinae-lifted RISC-V binaries. Two containers via docker/compose.yaml:
 - Model server: Ollama on the host (qwen3-coder:30b), reached via host.docker.internal:11434. Already running, GPU-resident.
 
 ## Current task (where we are)
-Getting `cloq-agent prove addloop` to close the smoke target end-to-end, no LLM.
-Everything works EXCEPT the generated theorem's Coq module scope:
-- src/cloq_agent/proof/theorem_builder.py renders a .v that instantiates the
-  vendored functor (vendor/picinae/timing/examples/riscv_addloop_timing_proof.v).
-- pet-server `start` fails: "The reference startof was not found in the current
-  environment." `startof` is a Picinae primitive in Picinae_core/Picinae_theory.
-- Hypothesis: the generated theorem sits at top level after `Import P NRV32`, but
-  `startof`/`models`/`rvtypctx` are only in scope INSIDE Module TimingProof. Fix is
-  likely to state the theorem inside a functor mirroring the vendored proof's structure,
-  then instantiate. Iterate against pet-server until `start` succeeds, then the gold
-  proof script (eval/targets.yaml gold_proof) drives to Qed.
+DONE: `cloq-agent prove addloop` closes the smoke target end-to-end, no LLM
+(`PROVED addloop iters=12 llm_calls=0`). The gold proof (eval/targets.yaml
+gold_proof) drives the functor-structured generated theorem to Qed via petanque.
+
+Root cause of the old "startof was not found" was NOT module scope — it was
+that pet-server was launched without `--root`, so coq-lsp never loaded
+/work/proofs/_CoqProject and `Require Import Picinae_riscv` silently failed
+(only the stdlib was on the loadpath; `N` resolved, every Picinae symbol did
+not). Fixed in docker/Dockerfile.rocq: `pet-server ... --root /work/proofs`.
+Diagnose loadpath issues with `fcc --root=/work/proofs targets/<f>.v` (coq-lsp's
+CLI checker) — it shares coq-lsp's _CoqProject discovery, unlike `coqc`.
+
+Other fixes this task:
+- theorem_builder.py: after `Import Inner` (Inner := TimingProof cpu), also
+  `Import Inner.RISCVTiming/Program_addloop/addloopAuto` — `Import Inner` alone
+  does NOT expose the functor outputs (lifted_prog/exits/entry_addr/
+  cycle_count_of_trace/t* constants); also dropped the stray `Qed.` after the
+  `Admitted.` placeholder (kept the theorem inside `Module {thm}_Proof (cpu)`).
+- cli.py: pass `name=args.target` to build_spec (was defaulting to lifted_prog).
+- eval/targets.yaml: gold_invariant path had one extra `../` (resolved outside
+  the repo → None → silent LLM fallback); now `../vendor/...`.
+- orchestrator.py: imported `run_script` from proof.hammer (gold path called it
+  but it was never imported → NameError once `start` started succeeding).
 
 ## Key facts learned this session
 - _CoqProject uses `-R ../vendor/picinae Picinae` + `-I` for riscv/examples/array dirs.
 - vendored Cloq tactic is `hammer` (NOT `whammer` — that name doesn't exist here).
 - addloop real addresses are 0x8 (entry) / 0x20 (exit), not 0x0/0x10.
-- TargetSpec.name bug: uses lifted_program ("lifted_prog") so file is Lifted_prog_gen.v;
-  should be the target key ("addloop"). Fix in eval/targets.py build_spec.
+- TargetSpec.name: build_spec falls back to lifted_program ("lifted_prog") unless
+  passed name=; cli.cmd_prove now passes name=args.target so file is Addloop_gen.v.
 - agent mounts: ..:/app and ../proofs:/work/proofs; workspace=/work/proofs (CLOQ_PETANQUE_WORKSPACE).
 - src is bind-mounted, so Python edits are live (clear __pycache__ if stale); .v regenerates each run.

@@ -32,5 +32,9 @@ RUN eval $(opam env) \
 
 COPY --chown=coq:coq proofs /work/proofs
 EXPOSE 8765
-# Launch petanque so pytanque can connect from the agent container.
-CMD ["bash", "-lc", "eval $(opam env) && pet-server --address 0.0.0.0 --port 8765"]
+# Launch petanque so pytanque can connect from the agent container. --root makes
+# coq-lsp pick up /work/proofs/_CoqProject (the -R Picinae load path); without it
+# pet-server only sees the stdlib, so `Require Import Picinae_riscv` silently fails
+# and every theorem statement referencing a Picinae symbol (startof, exits, ...)
+# can't be elaborated by `start`.
+CMD ["bash", "-lc", "eval $(opam env) && pet-server --address 0.0.0.0 --port 8765 --root /work/proofs"]

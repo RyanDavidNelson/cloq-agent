@@ -20,7 +20,7 @@ from ..config import Config
 from ..models import LLM
 from ..rag.retriever import Retriever
 from ..proof.petanque_driver import PetanqueDriver
-from ..proof.hammer import try_ladder
+from ..proof.hammer import try_ladder, run_script
 from ..proof.theorem_builder import TargetSpec, render, write
 from . import invariant_synth, tactic_repair
 

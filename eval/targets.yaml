@@ -8,7 +8,7 @@ addloop:
   theorem_name: addloop_timing_gen
   params: [["x", "N"], ["y", "N"]]
   objdump: targets/addloop.objdump
-  gold_invariant: ../../vendor/picinae/timing/examples/riscv_addloop_timing_proof.v
+  gold_invariant: ../vendor/picinae/timing/examples/riscv_addloop_timing_proof.v
   gold_proof:
     - "intros."
     - "apply prove_invs."

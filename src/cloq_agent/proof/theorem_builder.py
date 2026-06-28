@@ -41,6 +41,14 @@ Module {thm}_Proof (cpu : RVCPUTimingBehavior).
 
   Module Inner := TimingProof cpu.
   Import Inner.
+  (* Import Inner alone only exposes Inner's *direct* members; the Picinae
+     primitives (startof/models/rvtypctx) and the functor outputs
+     (lifted_prog/exits/entry_addr/cycle_count_of_trace + the t* timing
+     constants) live in these instantiated submodules and are otherwise
+     invisible at the theorem's scope. *)
+  Import Inner.RISCVTiming.
+  Import Inner.Program_addloop.
+  Import Inner.addloopAuto.
 
 {invariant}
 
@@ -53,7 +61,6 @@ Module {thm}_Proof (cpu : RVCPUTimingBehavior).
     satisfies_all lifted_prog ({inv_name} {inv_args}) exits ((x',s') :: t).
   Proof.
     {proof_body}
-  Qed.
 
 End {thm}_Proof.
 
