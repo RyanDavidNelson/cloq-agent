@@ -30,6 +30,19 @@ RUN eval $(opam env) \
       -w -notation-overridden -w -deprecated-since-8.20 -w -overriding-logical-loadpath \
       riscv_addloop_timing_proof.v
 
+# The constant-time ct_swap example (Task A). Lifted program + helper lemma + proof, in
+# dependency order. Its functor (TimingProof) is what the agent's generated ct_swap theorem
+# instantiates, so these .vo must exist for `Require Import ct_swap_proof` to resolve.
+RUN eval $(opam env) \
+ && cd /work/vendor/picinae/timing/examples/crypto/ct_swap \
+ && for f in ct_swap.v mod_add_same_r.v ct_swap_proof.v; do \
+      coqc -R /work/vendor/picinae Picinae \
+        -I /work/vendor/picinae/timing/riscv \
+        -I /work/vendor/picinae/timing/examples/crypto/ct_swap \
+        -w -notation-overridden -w -deprecated-since-8.20 -w -overriding-logical-loadpath \
+        "$f" || exit 1; \
+    done
+
 COPY --chown=coq:coq proofs /work/proofs
 EXPOSE 8765
 # Launch petanque so pytanque can connect from the agent container. --root makes

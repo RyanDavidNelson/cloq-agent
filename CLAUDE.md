@@ -67,6 +67,19 @@ vendor/picinae/          Picinæ + Cloq. READ-ONLY. Never edit; check its licens
   *by design*: addloop carries both a `gold_invariant` and a `gold_proof` in `targets.yaml`, so
   the orchestrator short-circuits the LLM and runs the gold script. This is the M1 exit criterion,
   not a bug.
+- **Tasks 1–3 DONE.** The theorem builder is **generalized** (Requires/program/exits/entry-regs
+  driven from `TargetSpec`; per-param register bindings `("x","N","R_A0")`); `cli.py` has the model
+  preflight (`doctor`, and `prove` healthchecks before any synthesis run); `lift/cfg.py` emits an
+  invariant *skeleton* (`skeleton_plan`) and `synthesize` has a `skeleton` mode that fills only the
+  loop/entry holes (config default `synthesis_mode: skeleton`). `addloop_llm` exists as the
+  synthesis twin of addloop.
+- **Task A DONE (first constant-time target).** `prove ct_swap` closes via the gold path
+  (`llm_calls=0`) reusing the vendored `crypto/ct_swap/ct_swap_proof.v` functor; `ct_swap_llm` is
+  the synthesis twin. The vendored `ct_swap(secret a0,*a a1,*b a2,len a3)` is an array swap whose
+  genuine secret (the a0 mask) **never appears in the timing invariant by design** — timing is a
+  closed form in `len`/`index` only. So `secret_param: base_addr_b` (the a2 data pointer): it
+  appears in the invariant yet no `cycle_count` arm depends on it (address-independence, the
+  structural obligation `spec_lint` checks). ct_swap uses **R_A2/R_A3**, not addloop's R_T0/R_T1.
 - The earlier module-scope blocker (`The reference startof was not found`) is **fixed**: the
   generated theorem is stated *inside* a functor mirroring the vendored proof
   (`Module {thm}_Proof (cpu : RVCPUTimingBehavior). Module Inner := TimingProof cpu. Import Inner.`),
@@ -74,21 +87,12 @@ vendor/picinae/          Picinæ + Cloq. READ-ONLY. Never edit; check its licens
 - The `TargetSpec.name` bug is **fixed**: the generated file is now `Addloop_gen.v` (target key),
   not `Lifted_prog_gen.v`.
 
-## Next tasks (see `docs/CLOQ_CODE_TASKS.md` for full, runnable specs)
-1. **Get the LLM firing.** Add an `addloop_llm` target (copy of addloop, `gold_invariant`/`gold_proof`
-   removed, `objdump:` kept) so the orchestrator takes the synthesis branch. Add a preflight that
-   the `LLM` client can reach Ollama. Independent of task 2 — addloop_llm reuses the addloop program,
-   so the (still addloop-specific) theorem builder already renders it.
-2. **Generalize `theorem_builder`.** It is currently hardcoded to addloop (`Require Import
-   riscv_addloop_timing_proof`, reuses `Program_addloop`/`lifted_prog`, fixed `R_T0`/`R_T1`
-   entry hypotheses). Drive Requires/program/exits/entry-hypotheses from `TargetSpec` so a second,
-   distinct program renders. This — not CFG work — is the real blocker for a non-addloop target.
-3. **CFG → invariant skeleton.** Promote `lift/cfg.py` from emitting a prose `describe()` to also
-   emitting an invariant *skeleton* (invariant-point addresses + `match … Some/None …` scaffold with
-   holes), and have `synthesize` fill only the per-loop timing formula + termination quantity.
-   Addresses come from the CFG, never the model; the postcondition stays pinned from the spec.
-
-Recommended order: 1 → 2 → 3. Task 1 is the fastest way to see `llm_calls > 0`.
+## Next tasks
+- More constant-time / WCET targets following the two-phase pattern (gold baseline target, then a
+  `<name>_llm` synthesis twin). Each new vendored program needs its `.vo` built in
+  `docker/Dockerfile.rocq` and an `-I` line in `proofs/_CoqProject` (see the ct_swap entries).
+- Improve skeleton synthesis so the model stops proposing `N`-illegal forms (e.g. `-1`, subtraction
+  underflow) and wrong loop-counter expressions — currently `ct_swap_llm` exhausts its attempts.
 
 ## Gotchas / key facts (still true)
 - The vendored Cloq tactic is **`hammer`**, NOT `whammer` — that name does not exist in this

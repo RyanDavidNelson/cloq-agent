@@ -6,6 +6,7 @@
 -I ../vendor/picinae/timing/riscv
 -I ../vendor/picinae/timing/examples/data_structures/array/find_in_array
 -I ../vendor/picinae/timing/examples
+-I ../vendor/picinae/timing/examples/crypto/ct_swap
 
 -arg -w -arg -notation-overridden
 -arg -w -arg -deprecated-since-8.20

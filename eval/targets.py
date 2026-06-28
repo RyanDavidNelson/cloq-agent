@@ -19,6 +19,7 @@ def load_targets(path: str | Path) -> dict[str, dict]:
 _OPTIONAL_SPEC_FIELDS = (
     "timing_functor", "timing_submodule", "program_module",
     "auto_module", "cpu_module", "cpu_config", "postcondition",
+    "entry_hyps",
 )
 
 

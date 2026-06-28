@@ -20,7 +20,7 @@ from the program module (the CFG), never the model.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -45,6 +45,13 @@ class TargetSpec:
     auto_module: str = "addloopAuto"          # Import Inner.<auto_module>.
     cpu_module: str = "NEORV32"               # concrete CPU functor for the final instantiation
     cpu_config: str = "NEORV32BaseConfig"     # config module fed to the CPU functor
+    # Extra entry-precondition hypotheses beyond the per-param register ties: (name, prop) pairs
+    # emitted verbatim as `(name: prop)` after the register hypotheses. These are well-formedness
+    # assumptions on the inputs (e.g. pointer alignment, length-in-bounds) that the program needs
+    # but that are NOT a single register = value. They come from the TRUSTED spec, never the model,
+    # so the soundness boundary (model fills invariant arms only) is preserved — they constrain the
+    # theorem's inputs, they cannot widen or weaken the pinned postcondition.
+    entry_hyps: list[tuple[str, str]] = field(default_factory=list)
     # The pinned exit-arm proposition for skeleton synthesis (the trusted WCET/ct claim). The
     # model never supplies this; it is spliced in verbatim. None disables skeleton synthesis.
     postcondition: str | None = None
@@ -135,9 +142,11 @@ def _entry_bindings(params: list[tuple[str, ...]]) -> list[tuple[str, str, str]]
     return [(_hyp_name(reg), reg, p[0]) for p, reg in zip(params, _DEFAULT_ENTRY_REGS)]
 
 
-def _entry_hyps_block(params: list[tuple[str, ...]]) -> str:
+def _entry_hyps_block(params: list[tuple[str, ...]], extra: list[tuple[str, str]]) -> str:
     bindings = _entry_bindings(params)
-    return "".join(f"\n      ({name}: s {reg} = {pname})" for name, reg, pname in bindings)
+    block = "".join(f"\n      ({name}: s {reg} = {pname})" for name, reg, pname in bindings)
+    block += "".join(f"\n      ({name}: {prop})" for name, prop in extra)
+    return block
 
 
 def render(
@@ -158,7 +167,7 @@ def render(
         cpu_module=spec.cpu_module,
         cpu_config=spec.cpu_config,
         binders=_binders(spec.params),
-        entry_hyps=_entry_hyps_block(spec.params),
+        entry_hyps=_entry_hyps_block(spec.params, spec.entry_hyps),
         lifted_prog=spec.lifted_program,
         exits=spec.exit_point,
         inv_name=invariant_name,

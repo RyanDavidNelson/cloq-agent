@@ -85,6 +85,40 @@ def test_render_second_program():
     assert "Qed." in src
 
 
+def test_entry_hyps_emitted_after_register_ties():
+    """Extra precondition hypotheses (alignment / in-bounds) that are not single register ties
+    render verbatim after the register hypotheses — needed for pointer targets like ct_swap."""
+    spec = TargetSpec(
+        name="ct_swap",
+        requires=["NEORV32", "RISCVTiming", "ct_swap_proof"],
+        lifted_program="lifted_prog",
+        entry_addr=0x1e4,
+        exit_point="exits",
+        theorem_name="ct_swap_timing_gen",
+        params=[("len", "N", "R_A3"), ("base_addr_b", "N", "R_A2")],
+        program_module="Program_ct_swap",
+        auto_module="ct_swapAuto",
+        entry_hyps=[("PTR_ALIGN", "exists k', base_addr_b = 4 * k'"),
+                    ("LEN_VALID", "4 * len < 2^32")],
+    )
+    src = render(spec, "Definition ct_swap_timing_invs (len base_addr_b : N) (t:trace) := True.",
+                 "ct_swap_timing_invs")
+    # Register ties from params, then the extra hypotheses verbatim.
+    assert "(A3: s R_A3 = len)" in src
+    assert "(A2: s R_A2 = base_addr_b)" in src
+    assert "(PTR_ALIGN: exists k', base_addr_b = 4 * k')" in src
+    assert "(LEN_VALID: 4 * len < 2^32)" in src
+    # Register ties precede the extra hypotheses (the entry-invariant arm is order-insensitive,
+    # but keeping ties first matches the vendored convention).
+    assert src.index("(A2: s R_A2 = base_addr_b)") < src.index("(PTR_ALIGN:")
+
+
+def test_no_entry_hyps_by_default():
+    """A spec without entry_hyps emits only the register-tie hypotheses (addloop back-compat)."""
+    src = render(SPEC, INV, "timing_invs")
+    assert "PTR_ALIGN" not in src and "LEN_VALID" not in src
+
+
 def test_malformed_param_raises_naming_the_param():
     bad = TargetSpec(
         name="bad", requires=["X"], lifted_program="p", entry_addr=0, exit_point="e",

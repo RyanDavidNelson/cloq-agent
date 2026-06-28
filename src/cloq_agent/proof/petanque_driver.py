@@ -63,9 +63,15 @@ class PetanqueDriver:
     # --- proof lifecycle -------------------------------------------------
 
     def start(self, file: str, theorem: str) -> StepResult:
-        """Open `file` and position at the start of `theorem`'s proof."""
-        state = self._client.start(file, theorem)  # type: ignore[union-attr]
-        return self._result(state, ok=True, error=None)
+        """Open `file` and position at the start of `theorem`'s proof. Never raises on a Rocq
+        error: a malformed generated file (e.g. a model-proposed invariant that doesn't type-
+        check, so the theorem can't be elaborated) is captured as ok=False so the orchestrator
+        records a *failed* proof and retries, rather than crashing the run."""
+        try:
+            state = self._client.start(file, theorem)  # type: ignore[union-attr]
+            return self._result(state, ok=True, error=None)
+        except Exception as e:  # petanque surfaces Rocq/load errors as exceptions
+            return StepResult(ok=False, finished=False, goals=[], error=str(e), state=None)
 
     def run(self, state: object, tactic: str) -> StepResult:
         """Apply one tactic (or `;`-chained block). Never raises on a Rocq error: the error

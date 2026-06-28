@@ -61,3 +61,73 @@ addloop_llm:
   # the model; this is spliced in verbatim. Matches the vendored addloop 0x20 arm.
   postcondition: "cycle_count_of_trace t' = tori + tandi + x * (tfbeq + taddi + tsub + ttbeq) + ttbeq"
   gold_cycles: null
+
+ct_swap:
+  # First constant-time target. The vendored OpenSSL-style ct_swap swaps two uint32 arrays
+  # element-wise under a secret mask; signature ct_swap(secret a0, *a a1, *b a2, len a3). The
+  # whole point is that the *timing* depends only on the public length, never on the array data
+  # or the swap mask. Reuses the vendored proof exactly like addloop (functor TimingProof in
+  # crypto/ct_swap/ct_swap_proof.v): requires names it, gold_invariant pulls its invariant set.
+  #
+  # secret_param: base_addr_b — the a2 data pointer. It appears in the invariant (register ties
+  # and pointer arithmetic) yet every `cycle_count_of_trace t' = ...` arm is a closed form in
+  # `len`/`index` ONLY, never in base_addr_b: timing is provably independent of the data address
+  # (address-independence, the structural constant-time obligation spec_lint enforces). The a0
+  # mask itself never enters the timing invariant at all, so there is no token to pin it to.
+  kind: ct
+  description: "Constant-time conditional swap of two uint32 arrays; one fixed-bound loop over len."
+  requires: ["NEORV32", "RISCVTiming", "ct_swap_proof"]
+  lifted_program: lifted_prog
+  entry_addr: 0x1e4
+  exit_point: exits
+  theorem_name: ct_swap_timing_gen
+  program_module: Program_ct_swap
+  auto_module: ct_swapAuto
+  # a3 = len, a2 = base pointer of array b (NOT addloop's R_T0/R_T1 convention).
+  params: [["len", "N", "R_A3"], ["base_addr_b", "N", "R_A2"]]
+  # Well-formedness preconditions the loop needs but that are not single register ties; trusted,
+  # from the spec, so they constrain inputs without touching the pinned postcondition.
+  entry_hyps:
+    - ["PTR_ALIGN", "exists k', base_addr_b = 4 * k'"]
+    - ["LEN_VALID", "4 * len < 2^32"]
+  secret_param: base_addr_b
+  gold_invariant: ../vendor/picinae/timing/examples/crypto/ct_swap/ct_swap_proof.v
+  gold_proof:
+    - "intros."
+    - "apply prove_invs."
+    - "simpl. rewrite ENTRY. unfold entry_addr. tstep r5_step. now repeat split."
+    - "intros."
+    - "eapply startof_prefix in ENTRY; try eassumption."
+    - "eapply preservation_exec_prog in MDL; try eassumption; [idtac|apply lift_riscv_welltyped]."
+    - "clear - ENTRY PRE MDL. rename t1 into t. rename s1 into s'."
+    - "destruct_inv 32 PRE."
+    - 'destruct PRE as (LEN_VALID & PTR_ALIGN & A3 & A2 & init). repeat (tstep r5_step). handle_ex. exists 0. split. lia. split. now psimpl. hammer.'
+    - 'destruct PRE as (LEN_VALID & PTR_ALIGN & FINAL_PTR & INDEX & INDEX_VALID & MOVING_PTR & CCOT). repeat (tstep r5_step). handle_ex. exists (1 + INDEX). split. assert (forall n m, n <= m -> n=m \/ n < m); lia. split. lia. hammer.'
+    - "hammer. replace INDEX with len; lia."
+  # Closed form (len-parameterized, not a single constant): see crypto/ct_swap/equation.txt.
+  gold_cycles: "17 + len * (42 + 5 * T_data_latency + 2 * T_inst_latency) + T_inst_latency"
+
+ct_swap_llm:
+  # Synthesis-branch twin of ct_swap: no gold_invariant / gold_proof, so the orchestrator must
+  # call invariant_synth.synthesize (llm_calls >= 1). objdump kept so a real CFG description is
+  # built; the constant-time arm of spec_lint still requires secret_param in whatever the model
+  # proposes. Reuses the ct_swap program so this measures synthesis, not theorem-builder work.
+  kind: ct
+  description: "Constant-time conditional swap; synthesis-branch twin of ct_swap (no gold hints)."
+  requires: ["NEORV32", "RISCVTiming", "ct_swap_proof"]
+  lifted_program: lifted_prog
+  entry_addr: 0x1e4
+  exit_point: exits
+  theorem_name: ct_swap_timing_gen
+  program_module: Program_ct_swap
+  auto_module: ct_swapAuto
+  params: [["len", "N", "R_A3"], ["base_addr_b", "N", "R_A2"]]
+  entry_hyps:
+    - ["PTR_ALIGN", "exists k', base_addr_b = 4 * k'"]
+    - ["LEN_VALID", "4 * len < 2^32"]
+  secret_param: base_addr_b
+  objdump: targets/ct_swap.objdump
+  # Pinned exit-arm (the trusted ct/WCET claim) for skeleton synthesis; only loop/entry arms are
+  # holes for the model. Mirrors the vendored 0x1f4 arm (time_of_ct_swap is in the imported scope).
+  postcondition: "cycle_count_of_trace t' = tslli 2 + tsub + tadd + len * (ttbne + tlw + tlw + taddi + taddi + txor + tand + txor + tsw + tlw + txor + tsw + tjal) + tfbne + tjalr"
+  gold_cycles: "17 + len * (42 + 5 * T_data_latency + 2 * T_inst_latency) + T_inst_latency"

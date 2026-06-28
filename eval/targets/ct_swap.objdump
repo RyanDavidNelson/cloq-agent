@@ -1,0 +1,23 @@
+
+ct_swap.elf:     file format elf32-littleriscv
+
+Disassembly of section .text:
+
+000001e4 <ct_swap>:
+     1e4:	00269693          	slli	a3,a3,0x2
+     1e8:	40a00533          	sub	a0,zero,a0
+     1ec:	00d606b3          	add	a3,a2,a3
+     1f0:	00d61463          	bne	a2,a3,1f8 <ct_swap+0x14>
+     1f4:	00008067          	jalr	zero,0(ra)
+     1f8:	0005a703          	lw	a4,0(a1)
+     1fc:	00062783          	lw	a5,0(a2)
+     200:	00458593          	addi	a1,a1,4
+     204:	00460613          	addi	a2,a2,4
+     208:	00f747b3          	xor	a5,a4,a5
+     20c:	00a7f7b3          	and	a5,a5,a0
+     210:	00f74733          	xor	a4,a4,a5
+     214:	fee5ae23          	sw	a4,-4(a1)
+     218:	ffc62703          	lw	a4,-4(a2)
+     21c:	00f747b3          	xor	a5,a4,a5
+     220:	fef62e23          	sw	a5,-4(a2)
+     224:	fcdff06f          	jal	zero,1f0 <ct_swap+0xc>
