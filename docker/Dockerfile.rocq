@@ -1,4 +1,4 @@
-# Rocq + coq-lsp + petanque + CoqHammer + Tactician, with Picinae/Cloq prebuilt.
+# Rocq + coq-lsp + petanque + CoqHammer, with Picinae/Cloq prebuilt.
 # Base on the community Coq image; pin a version that matches your coq-lsp release.
 FROM coqorg/coq:8.20
 
@@ -8,18 +8,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 USER coq
 
-# coq-lsp ships petanque (pet-server). Tactician + CoqHammer are the automation net.
-RUN opam update && opam install -y \
-        coq-lsp \
-        coq-hammer coq-hammer-tactics \
-        coq-tactician \
+# coq-lsp ships petanque (pet-server); lwt+logs are required for the pet-server
+# executable to be built. CoqHammer is the automation net.
+RUN opam update && opam install -y lwt logs \
+    && opam install -y coq-lsp coq-hammer coq-hammer-tactics \
     && opam clean -a -c
 
-# Build the vendored Picinae/Cloq (mounted at build time or via submodule copy).
+# Build the vendored Picinae/Cloq in three layers: core -> timing -> examples.
+# No `|| true`: if any layer fails to compile, the image build must fail loudly.
 WORKDIR /work
 COPY --chown=coq:coq vendor/picinae /work/vendor/picinae
-RUN eval $(opam env) && \
-    if [ -f /work/vendor/picinae/Makefile ]; then make -C /work/vendor/picinae || true; fi
+RUN eval $(opam env) \
+ && make -C /work/vendor/picinae \
+ && make -C /work/vendor/picinae/timing \
+ && cd /work/vendor/picinae/timing/examples/data_structures/array/find_in_array \
+ && coqc -R /work/vendor/picinae Picinae array.v \
+ && cd /work/vendor/picinae/timing/examples \
+ && coqc -R /work/vendor/picinae Picinae \
+      -I /work/vendor/picinae/timing/riscv \
+      -I /work/vendor/picinae/timing/examples/data_structures/array/find_in_array \
+      -w -notation-overridden -w -deprecated-since-8.20 -w -overriding-logical-loadpath \
+      riscv_addloop_timing_proof.v
 
 COPY --chown=coq:coq proofs /work/proofs
 EXPOSE 8765

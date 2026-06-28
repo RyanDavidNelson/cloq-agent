@@ -1,6 +1,12 @@
 # Python agent: orchestrator, RAG, eval. Talks to pet-server (rocq) and a model server.
 FROM python:3.11-slim
 
+# git + CA certs are required so `uv` can clone the pytanque VCS dependency
+# (git+https://github.com/llm4rocq/pytanque.git) over HTTPS.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir uv
 WORKDIR /app
 COPY pyproject.toml README.md ./
@@ -8,7 +14,6 @@ COPY src ./src
 COPY eval ./eval
 COPY config ./config
 RUN uv pip install --system -e ".[rag]"
-
 ENV CLOQ_PETANQUE_HOST=rocq
 ENV CLOQ_MODEL_BASE_URL=http://host.docker.internal:11434/v1
 ENTRYPOINT ["cloq-agent"]

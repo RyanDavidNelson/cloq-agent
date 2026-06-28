@@ -71,44 +71,52 @@ class Orchestrator:
         cfg_description: str,
         secret_param: str | None = None,
         gold_invariant: str | None = None,
+        gold_proof: list[str] | None = None,
     ) -> ProofResult:
         t0 = time.time()
         llm_calls = 0
         escalated = False
 
         for attempt in range(1, self.cfg.agent.invariant_attempts + 1):
-            # 1. invariant set: gold (smoke target) or synthesized
             if gold_invariant is not None and attempt == 1:
                 invariant_src = gold_invariant
             else:
                 retrieved = self.retriever.retrieve(cfg_description)
                 escalate = attempt > 1 and self.llm.can_escalate
                 invariant_src = invariant_synth.synthesize(
-                    self.llm,
-                    name=spec.name,
-                    entry=spec.entry_addr,
-                    cfg_description=cfg_description,
-                    retrieved=retrieved,
-                    escalate=escalate,
+                    self.llm, name=spec.name, entry=spec.entry_addr,
+                    cfg_description=cfg_description, retrieved=retrieved, escalate=escalate,
                 )
                 llm_calls += 1
                 escalated = escalated or escalate
 
-            # 2. spec lint (anti-vacuity)
             lint = spec_lint(spec, invariant_src, secret_param=secret_param)
             if lint is not None:
                 if gold_invariant is not None:
                     return ProofResult(spec.name, False, attempt, 0, llm_calls, escalated,
                                        None, time.time() - t0, error=lint)
-                continue  # bad proposal; try another invariant
+                continue
 
-            # 3. render + load into petanque
             source = render(spec, invariant_src, _inv_name(invariant_src))
             write(spec, source, self.workspace)
-            start = driver.start(str(self.workspace / "targets" / f"{spec.name.capitalize()}_gen.v"),
-                                 spec.theorem_name)
+            start = driver.start(
+                str(self.workspace / "targets" / f"{spec.name.capitalize()}_gen.v"),
+                spec.theorem_name,
+            )
             if not start.ok:
                 continue
+
+            # Deterministic smoke path: run the gold proof script, no LLM.
+            if gold_proof is not None and attempt == 1:
+                outcome = run_script(driver, start.state, gold_proof)
+                if outcome.closed:
+                    return ProofResult(spec.name, True, attempt, len(gold_proof), llm_calls,
+                                       escalated, outcome.tactic, time.time() - t0,
+                                       proof_script=list(gold_proof))
+                return ProofResult(spec.name, False, attempt, len(gold_proof), llm_calls,
+                                   escalated, None, time.time() - t0,
+                                   proof_script=list(gold_proof),
+                                   error=f"gold proof failed at: {outcome.tactic}")
 
             res = self._discharge(driver, start, spec, attempt, llm_calls, escalated, t0)
             if res.proved:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import yaml
 
@@ -13,13 +14,12 @@ def load_targets(path: str | Path) -> dict[str, dict]:
     return yaml.safe_load(Path(path).read_text())
 
 
-def build_spec(t: dict, repo_root: Path) -> tuple[TargetSpec, str, str | None, str | None]:
-    """Return (spec, cfg_description, secret_param, gold_invariant_source)."""
+def build_spec(t: dict, repo_root: Path, name: str | None = None):
     spec = TargetSpec(
-        name=t["lifted_program"],
+        name=name or t["lifted_program"],        
         requires=t["requires"],
         lifted_program=t["lifted_program"],
-        entry_addr=int(t["entry_addr"]),
+        entry_addr=int(str(t["entry_addr"]), 0),   # accept 0x.. hex
         exit_point=t["exit_point"],
         theorem_name=t["theorem_name"],
         params=[tuple(p) for p in t.get("params", [])],
@@ -42,12 +42,15 @@ def build_spec(t: dict, repo_root: Path) -> tuple[TargetSpec, str, str | None, s
         if gip.exists():
             gold_inv = _extract_invariant(gip.read_text())
 
-    return spec, cfg_desc, secret, gold_inv
+    gold_proof = t.get("gold_proof")  # list[str] | None
+
+    return spec, cfg_desc, secret, gold_inv, gold_proof
 
 
 def _extract_invariant(vsrc: str) -> str | None:
-    """Pull the `Definition timing_invs ... .` block out of a checked-in proof file."""
-    import re
-
-    m = re.search(r"(Definition\s+timing_invs\b.*?\.\s*$)", vsrc, re.DOTALL | re.MULTILINE)
+    """Pull a `Definition <name>_timing_invs ... .` (or timing_invs) block from a proof file."""
+    m = re.search(
+        r"(Definition\s+\w*timing_invs\b.*?end\s*\.)",
+        vsrc, re.DOTALL,
+    )
     return m.group(1).strip() if m else None

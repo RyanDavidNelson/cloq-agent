@@ -9,8 +9,6 @@ services:
       - "8765:8765"          # petanque
     volumes:
       - ../proofs:/work/proofs
-      - ../vendor:/work/vendor
-
   agent:
     build:
       context: ..
@@ -20,8 +18,11 @@ services:
     environment:
       CLOQ_PETANQUE_HOST: rocq
       CLOQ_MODEL_BASE_URL: http://host.docker.internal:11434/v1
+      CLOQ_PETANQUE_WORKSPACE: /work/proofs
+      PYTHONPATH: /app
     volumes:
       - ..:/app
+      - ../proofs:/work/proofs
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # keep it interactive: `docker compose run --rm agent prove addloop`

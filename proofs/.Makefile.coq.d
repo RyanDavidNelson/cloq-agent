@@ -1,0 +1,2 @@
+targets/Addloop.vo targets/Addloop.glob targets/Addloop.v.beautified targets/Addloop.required_vo: targets/Addloop.v ../vendor/picinae/timing/riscv/NEORV32.vo ../vendor/picinae/timing/examples/riscv_addloop_timing_proof.vo
+targets/Addloop.vos targets/Addloop.vok targets/Addloop.required_vos: targets/Addloop.v ../vendor/picinae/timing/riscv/NEORV32.vos ../vendor/picinae/timing/examples/riscv_addloop_timing_proof.vos

@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, get_type_hints
 
 import yaml
 
@@ -85,20 +85,20 @@ class Config:
     fpga: FpgaCfg = field(default_factory=FpgaCfg)
     eval: EvalCfg = field(default_factory=EvalCfg)
 
-
 def _build(cls: type, data: dict[str, Any]) -> Any:
     """Recursively instantiate a (nested) dataclass from a dict, ignoring unknown keys."""
+    hints = get_type_hints(cls)          # resolves stringized annotations -> real classes
     kwargs: dict[str, Any] = {}
     for f in fields(cls):
         if f.name not in data:
             continue
         val = data[f.name]
-        if is_dataclass(f.type) and isinstance(val, dict):
-            kwargs[f.name] = _build(f.type, val)
+        ftype = hints.get(f.name, f.type)
+        if is_dataclass(ftype) and isinstance(val, dict):
+            kwargs[f.name] = _build(ftype, val)
         else:
             kwargs[f.name] = val
     return cls(**kwargs)
-
 
 def _apply_env(cfg: Config) -> None:
     """Override scalar fields from CLOQ_<SECTION>_<KEY> env vars."""

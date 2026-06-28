@@ -45,12 +45,11 @@ def cmd_prove(args) -> int:
         console.print(f"[red]unknown target '{args.target}'. known: {list(targets)}[/red]")
         return 2
     t = targets[args.target]
-    spec, cfg_desc, secret, gold = build_spec(t, _repo_root())
-
+    spec, cfg_desc, secret, gold, gold_proof = build_spec(t, _repo_root())
     orch = Orchestrator(cfg)
     with pet_driver(cfg.petanque) as d:
         res = orch.prove(d, spec, cfg_description=cfg_desc,
-                         secret_param=secret, gold_invariant=gold)
+                         secret_param=secret, gold_invariant=gold, gold_proof=gold_proof)
     status = "[green]PROVED[/green]" if res.proved else "[red]FAILED[/red]"
     console.print(f"{status} {res.target}  iters={res.iterations} llm_calls={res.llm_calls} "
                   f"closing={res.closing_tactic} {res.wall_s:.1f}s")

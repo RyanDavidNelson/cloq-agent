@@ -1,9 +1,14 @@
-# Rocq project file for cloq-agent proof targets.
-# Adjust the -Q/-R paths to match your vendored Picinae/Cloq layout.
-
--R ../vendor/picinae         Picinae
--R ../vendor/picinae/timing  Cloq
--R targets                   CloqTargets
--R lib                       CloqLib
+# Vendored Picinae/Cloq is PRE-BUILT in the image. Use -R for the core logical
+# root and -I (physical search path) for the dirs holding bare-Required files,
+# so `Require Import NEORV32 / array / riscv_addloop_timing_proof` resolve by
+# filename without logical-path collisions.
+-R ../vendor/picinae Picinae
+-I ../vendor/picinae/timing/riscv
+-I ../vendor/picinae/timing/examples/data_structures/array/find_in_array
+-I ../vendor/picinae/timing/examples
 
 -arg -w -arg -notation-overridden
+-arg -w -arg -deprecated-since-8.20
+-arg -w -arg -overriding-logical-loadpath
+
+targets/Addloop.v

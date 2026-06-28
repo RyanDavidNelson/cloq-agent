@@ -1,13 +1,9 @@
 """The automation ladder tried before spending any LLM tokens.
 
-Cloq's own `whammer`/`hammer` close most timing goals (the paper's whole point), so they go
-first. CoqHammer's `hammer`/`sauto` and the lia/eauto closers are the safety net. This is the
-"hammer-first, LLM-fallback" pattern that consistently beats LLM-only proving.
-
-Note the name clash: Cloq exports a tactic literally called `hammer`, and CoqHammer also
-exports `hammer`. Whichever is imported last wins, so we reference Cloq's via `whammer` (its
-higher-level wrapper) and reach CoqHammer through `sauto`/`hauto`/`qauto`, which are
-unambiguous. Adjust `LADDER` to match your vendored Cloq tactic names.
+Cloq's `hammer` closes most timing *leaf* goals. CoqHammer's sauto/qauto and lia/eauto are
+the safety net. NOTE: this vendored Cloq has no `whammer` wrapper, and no single tactic closes
+a top-level `satisfies_all` goal — that needs the structured prove_invs/step/hammer script.
+The ladder here closes residual *leaf* goals only.
 """
 from __future__ import annotations
 
@@ -15,11 +11,9 @@ from dataclasses import dataclass
 
 from .petanque_driver import PetanqueDriver, StepResult
 
-# Ordered cheapest -> strongest. Each entry is a single tactic invocation.
 LADDER: list[str] = [
-    "whammer.",                 # Cloq: step; psimpl; lia bundle (closes most timing goals)
-    "hammer.",                  # Cloq: lower-level variant making fewer assumptions
-    "psimpl; lia.",             # binary-arith simplify then linear integer arithmetic
+    "hammer.",                  # Cloq leaf closer (was `whammer.` — that name does not exist)
+    "psimpl; lia.",
     "lia.",
     "now eauto with arith.",
     "sauto.",                   # CoqHammer
@@ -30,7 +24,7 @@ LADDER: list[str] = [
 @dataclass
 class HammerOutcome:
     closed: bool
-    tactic: str | None          # the tactic that closed it (for the proof script + RAG label)
+    tactic: str | None
     state: object | None
 
 
@@ -39,13 +33,24 @@ def try_ladder(
     state: object,
     ladder: list[str] | None = None,
 ) -> HammerOutcome:
-    """Try each tactic on the current goal in order; stop at the first that finishes the proof.
-
-    We attempt each tactic from the *same* incoming state. petanque is functional (each run
-    returns a fresh state), so a failed attempt does not corrupt the goal we retry from.
-    """
     for tac in ladder or LADDER:
         res: StepResult = driver.run(state, tac)
         if res.ok and res.finished:
             return HammerOutcome(closed=True, tactic=tac, state=res.state)
     return HammerOutcome(closed=False, tactic=None, state=state)
+
+
+def run_script(driver: PetanqueDriver, state: object, script: list[str]) -> HammerOutcome:
+    """Run a fixed tactic script (the gold proof for a smoke target) step-by-step.
+    Returns closed=True iff the proof finishes. Used to drive a known-good proof deterministically,
+    with no LLM in the loop."""
+    cur = driver._result(state, ok=True, error=None)
+    last = None
+    for tac in script:
+        res = driver.run(cur.state, tac)
+        if not res.ok:
+            return HammerOutcome(closed=False, tactic=tac, state=cur.state)
+        last, cur = tac, res
+        if res.finished:
+            return HammerOutcome(closed=True, tactic=last, state=res.state)
+    return HammerOutcome(closed=bool(cur.finished), tactic=last, state=cur.state)
