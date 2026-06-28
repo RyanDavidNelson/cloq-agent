@@ -28,13 +28,12 @@ match t with (Addr a, s) :: t' => match a with
                         noverlaps base_mem a0 /\
                         cycle_count_of_trace t' = 0)
 | 0x80002460 => Some (noverlaps (s V_MEM32) a0 /\
-                        cycle_count_of_trace t' = 
-                        (tlw + tlw + tlw + tsw + tsw + tlw +
-                         (if s V_MEM32 Ⓓ[4 + s V_MEM32 Ⓓ[16 + a0]] =? a0 then
-                             tfbne + tsw 
-                          else
-                             ttbne) +
-                         tsw + tlw + taddi + tsw) * 1 + 0)
+                        cycle_count_of_trace t' = tlw + tlw + tlw + tsw + tsw + tlw +
+                        (if s V_MEM32 Ⓓ[4 + s V_MEM32 Ⓓ[16 + a0]] =? a0 then
+                            tfbne + tsw 
+                         else
+                            ttbne) +
+                        tsw + tlw + taddi + tsw + tjalr)
 | 0x80002470 => Some (time_of_uxListRemove t base_mem a0)
 | _ => None
 end | _ => None end.

@@ -63,6 +63,14 @@ vendor/picinae/          Picinæ + Cloq. READ-ONLY. Never edit; check its licens
    corpus (skill accumulation).
 
 ## Current state
+
+> **Consolidated capability/results write-up: [`docs/RESULTS.md`](docs/RESULTS.md).**
+> TL;DR — good at straight-line WCET/CT (synthesis **3/4**), handles the simplest counter loop
+> (addloop, via proof reuse; `loop_easy` **1/3**), and NOT data-structure loops (they need bespoke
+> ITP — decidability case-splits, aliasing). CFG-derived loop **timing is solved for all loops**;
+> the wall is proof **discharge**, not synthesis. The bullets below are the build log; the matrix
+> and the evidence for the ceiling are in `docs/RESULTS.md`.
+
 - **M1 DONE.** `prove addloop` closes end-to-end with `llm_calls=0`. It reports `llm_calls=0`
   *by design*: addloop carries both a `gold_invariant` and a `gold_proof` in `targets.yaml`, so
   the orchestrator short-circuits the LLM and runs the gold script. This is the M1 exit criterion,
@@ -183,6 +191,27 @@ vendor/picinae/          Picinæ + Cloq. READ-ONLY. Never edit; check its licens
     `(s R_A3 - s R_A2)` index, which neither proves directly nor matches ct_swap's gold script.
   - `uxListRemove_llm`'s `0x80002460` join needs the noverlaps branch proof.
 - `vListInsert` (the cyclic-list search loop, ~15 expert-hours) — the loop stretch target.
+
+### The real next capability: an LLM proof-search agent (path to data-structure loops)
+Incremental synthesis/discharge tweaks have plateaued — the ablation shows the wall is **proof
+discharge of data-structure loops**, which need *bespoke* ITP, not invariant synthesis: every
+vendored search loop (find_in_array / find_in_array_opt / find_in_list) requires a program-specific
+**decidability case-split** (`key_in_array_dec`, `key_in_linked_list_dec`) to prove the
+found/not-found WCET disjunction, ct_swap needs an `exists`-index witness, uxListRemove needs
+`noverlaps`/`getmem_noverlap`. None of these is genericizable, and there is **no remaining generic
+("simple") loop in this RISC-V corpus to gain** — so more `try_structured` / prompt work is not
+load-bearing (see `docs/RESULTS.md` for the evidence). The honest next step is a different tool:
+
+- **An LLM proof-search agent** — multi-step, backtracking, operating on the live goal *state*
+  (not one-shot tactic repair), able to *discover* moves like `destruct (key_in_array_dec …)`,
+  `exists (1 + i)`, and the case-specific reasoning. This is the only thing that cracks the
+  data-structure loops; budget it as a real sub-project (days), keep the soundness boundary
+  (petanque is ground truth; postcondition pinned), and reuse the existing skill library + RAG.
+- **Pair it with a held-out generalization target** (a loop whose gold is withheld from the proof
+  library and few-shot) so the metric measures capability, not recall — today's `_llm` numbers are
+  in-distribution (addloop_llm closes by reusing addloop's own gold proof).
+- Optionally **broaden the corpus to where mechanical still works** (e.g. the x86 `sum` accumulate
+  loop — no early exit, no decidability), which needs the AMD64 timing pipeline (a separate lift).
 
 ## Gotchas / key facts (still true)
 - The vendored Cloq tactic is **`hammer`**, NOT `whammer` — that name does not exist in this
