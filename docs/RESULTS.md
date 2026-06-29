@@ -206,6 +206,31 @@ from the vendored functor (the CFG-derived parts); and the two branch leaf scrip
 proof (renamed), not yet a uniform generic closer. **find_in_list** (needs list theory) and the cyclic
 **vListInsert** (uniqueness-in-a-cycle) stay genuinely bespoke — not promised.
 
+### Held-out measurement (the twin-vs-generalization line)
+
+`find_in_array_tmpl` is an identical-program twin (reused program + reused `time_of_*` + renamed gold
+leaves): it validates the emission MECHANISM, not generalization. To measure the gap, two fresh
+search functions the corpus has never seen — `eval/heldout/se_find_eq.c` (`==`) and `se_find_ge.c`
+(`>=`, a different predicate) — were run through the real `compile -> lift` front (gcc -O2, the pinned
+flags; `eval/heldout/measure.py`). Findings:
+
+- **program-half READY** — `intake.generate_scaffold` emits a `Program_<func>` functor for both; both
+  classify correctly as `search early-exit`.
+- **GAP 1 (upstream, newly revealed): shape recovery is itself twin-fragile.** gcc -O2 strength-reduces
+  `arr[i]` to a **running pointer** (`lw a3,0(a5)` ; `addi a5,a5,4`) — there is no `slli`/`add`, so
+  `cfg.array_search_shape` returns `None`. The vendored `find_in_array.objdump` carries the explicit
+  `slli;add;lw` index form; a real compile does not. Until recovery handles the running-pointer form
+  (base-pointer recovery, as in ct_swap's induction pointer), no template emits for held-out search.
+- **GAP 2 (confirmed): no disjunctive timing.** `cfg.loop_timing` returns a single `(prefix, body)`,
+  but `time_of_find_in_array` is a found/not-found **disjunction** (the partial-iteration cost differs
+  on the two exit edges: `ttbgeu` vs `tfbgeu + … + ttbeq`). A held-out function can't reuse `time_of_*`;
+  the CFG must emit the two-arm form. This is upstream of any closer — a wrong `time_of` closes nothing.
+- **GAP 3: the generic branch closer** (still the renamed gold leaves).
+
+Corrected order to "Phase 2 done to held-out": **(1) running-pointer shape recovery -> (2) generated
+disjunctive timing -> (3) uniform branch closer -> one held-out search function at Qed** (se_find_eq
+minimum, se_find_ge to prove the predicate generalized). The program-half is already wired.
+
 ## Next (see CLAUDE.md "Next tasks")
 
 The honest path to data-structure loops is an **LLM proof-search agent** — a multi-step,
