@@ -43,15 +43,22 @@ class LLM:
         use_esc = escalate and self._escalation is not None
         client = self._escalation if use_esc else self._primary
         model = self.cfg.escalation.name if use_esc else self.cfg.name
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
+        # Some models (e.g. Claude Opus 4.8) reject `temperature` entirely. `cfg.temperature = None`
+        # marks such a model: omit the param regardless of any caller override, so the same client
+        # works for Ollama (which wants it) and those models (which forbid it).
+        temp = None if self.cfg.temperature is None else (
+            self.cfg.temperature if temperature is None else temperature)
+        kwargs = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            temperature=self.cfg.temperature if temperature is None else temperature,
-            max_tokens=self.cfg.max_tokens if max_tokens is None else max_tokens,
-        )
+            "max_tokens": self.cfg.max_tokens if max_tokens is None else max_tokens,
+        }
+        if temp is not None:
+            kwargs["temperature"] = temp
+        resp = client.chat.completions.create(**kwargs)
         return Completion(
             text=resp.choices[0].message.content or "",
             model=model,
@@ -73,7 +80,6 @@ class LLM:
             resp = self._primary.chat.completions.create(
                 model=self.cfg.name,
                 messages=[{"role": "user", "content": "ping"}],
-                temperature=0.0,
                 max_tokens=1,
             )
         except Exception as e:  # noqa: BLE001 - we re-raise with diagnostic context

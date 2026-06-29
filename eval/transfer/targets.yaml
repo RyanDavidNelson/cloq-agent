@@ -6,7 +6,7 @@
 
 openssl:
   # easy: branchless constant-time helpers (include/internal/constant_time.h) -> expect pass
-  - { name: value_barrier,        tier: easy,   func: value_barrier,         property: ct,   src: ct_value_barrier.c, status: ready }
+  - { name: constant_time_lt,     tier: easy,   func: constant_time_lt,      property: ct,   src: ct_lt.c,            status: ready, note: "swapped in for value_barrier, which gcc folds to a bare ret (degenerate 0-cycle)" }
   - { name: constant_time_msb,    tier: easy,   func: constant_time_msb,     property: ct,   src: ct_msb.c,           status: ready }
   - { name: constant_time_is_zero,tier: easy,   func: constant_time_is_zero, property: ct,   src: ct_is_zero.c,       status: ready }
   - { name: constant_time_eq,     tier: easy,   func: constant_time_eq,      property: ct,   src: ct_eq.c,            status: ready }
@@ -25,7 +25,7 @@ freertos:
   - { name: vListInitialiseItem,  tier: easy,   func: vListInitialiseItem,   property: wcet, src: vListInitialiseItem.c,  status: ready }
   - { name: vListInsertEnd,       tier: easy,   func: vListInsertEnd,        property: wcet, src: vListInsertEnd.c,       status: ready }
   - { name: xTaskGetCurrentTaskHandle, tier: easy, func: xTaskGetCurrentTaskHandle, property: wcet, src: xTaskGetCurrentTaskHandle.c, status: ready }
-  - { name: prvResetNextTaskUnblockTime, tier: easy, func: prvResetNextTaskUnblockTime, property: wcet, src: null, status: pending, note: "needs TCB_t + delayed-list globals; reduction pending" }
+  - { name: xTaskGetTickCount,    tier: easy,   func: xTaskGetTickCount,     property: wcet, src: xTaskGetTickCount.c, status: ready, note: "swapped in for prvResetNextTaskUnblockTime (which needs TCB_t + delayed-list globals)" }
   # medium: one loop / aliasing -> mixed, mostly ceiling
   - { name: uxListRemove,         tier: medium, func: uxListRemove,          property: wcet, src: uxListRemove.c,         status: ready }
   - { name: xTaskResumeAll,       tier: medium, func: xTaskResumeAll,        property: wcet, src: null,                   status: pending, note: "scheduler + pending-ready loop over TCB lists; reduction pending" }

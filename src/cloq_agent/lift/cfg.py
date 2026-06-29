@@ -21,12 +21,21 @@ _TARGET = re.compile(r"([0-9a-fA-F]+)\s*(?:<|$)")
 # taken (tt<op>) and a fall-through (tf<op>) form chosen by which edge stays in the loop.
 _TCONST = {
     "lw": "tlw", "sw": "tsw", "addi": "taddi", "add": "tadd", "sub": "tsub",
+    # sub-word memory ops (NEORV32 models tlbu/tlb/tlhu/tlh/tsb/tsh = 4 + T_data_latency)
+    "lb": "tlb", "lbu": "tlbu", "lh": "tlh", "lhu": "tlhu", "sb": "tsb", "sh": "tsh",
     "xor": "txor", "xori": "txori", "and": "tand", "andi": "tandi", "or": "tor", "ori": "tori",
     "jal": "tjal", "j": "tjal", "jalr": "tjalr", "ret": "tjalr", "lui": "tlui", "auipc": "tauipc",
     "mul": "tmul", "sll": "tsll", "slt": "tslt", "sltu": "tsltu",
 }
 _SHIFT = {"slli": "tslli", "srli": "tsrli", "srai": "tsrai"}
 _BRANCH_OPS = {"beq", "bne", "blt", "bge", "bltu", "bgeu"}
+_LOADS = {"lw", "lh", "lhu", "lb", "lbu"}
+_STORES = {"sw", "sh", "sb"}
+
+
+def _reg(name: str) -> str:
+    """ABI register name (e.g. `a5`, `t0`) -> Picinae register (`R_A5`, `R_T0`)."""
+    return f"R_{name.strip().upper()}"
 
 
 def _shamt(operands: str) -> str:
@@ -160,6 +169,42 @@ class CFG:
                 terms.append(term)
         return " + ".join(terms)
 
+    # --- loop-shape analysis for the synthesis skeleton (fixes #2-#4) -------------------------
+    def induction_var(self, header: int) -> tuple[str, int] | None:
+        """Detect the loop's induction variable: a register incremented by a constant each
+        iteration (`addi rX, rX, k` / `c.addi rX, k`). Returns (R_<reg>, step) or None.
+        Used to turn the loop-arm hole into a concrete `exists i, (s R_X) = base + i*step` skeleton
+        (fix #2: array/pointer loops)."""
+        for ins in sorted((i for s in self._natural_loop(header) for i in self.blocks[s].insns),
+                          key=lambda i: i.addr):
+            if ins.mnemonic in ("addi", "c.addi"):
+                ops = [o.strip() for o in ins.operands.split(",")]
+                if len(ops) >= 3 and ops[0] == ops[1]:
+                    try:
+                        return _reg(ops[0]), int(ops[2], 0)
+                    except ValueError:
+                        continue
+                if len(ops) == 2 and ins.mnemonic == "c.addi" and ops[0]:
+                    try:
+                        return _reg(ops[0]), int(ops[1], 0)
+                    except ValueError:
+                        continue
+        return None
+
+    def loop_mem_ops(self, header: int) -> set[str]:
+        """Memory mnemonics that occur inside the loop body (loads/stores)."""
+        loop = self._natural_loop(header)
+        return {i.mnemonic for s in loop for i in self.blocks[s].insns} & (_LOADS | _STORES)
+
+    def data_dependent_exit(self, header: int) -> bool:
+        """True when the loop's exit is data-dependent (a search): more than one way out, and the
+        body loads from memory (the compared value comes from the data). Fix #3: case-split."""
+        return len({d for _, d in self.loop_exit_edges(header)}) > 1 and bool(self.loop_mem_ops(header) & _LOADS)
+
+    def aliased_stores(self, header: int) -> bool:
+        """True when the loop body stores through a pointer (needs noverlap reasoning). Fix #4."""
+        return bool(self.loop_mem_ops(header) & _STORES)
+
     def _natural_loop(self, header: int) -> set[int]:
         """Block starts of the natural loop(s) of `header`: header plus every block that can reach
         a back-edge tail without passing through header. Pure CFG structure."""
@@ -208,6 +253,35 @@ class CFG:
 
         return " + ".join(prefix), " + ".join(body)
 
+    def _loop_arm_hint(self, a: int) -> str:
+        """The synthesis hint for a loop-header hole, specialised to the loop's shape
+        (fixes #2 array/pointer, #3 search, #4 aliasing). The CFG-computed loop timing is given as
+        authoritative guidance; the structural scaffold (exists-index / case-split / noverlap) tells
+        the model which shape the discharge needs, instead of one generic FILL_ME."""
+        tim = self.loop_timing(a)
+        if tim is None:
+            return (f"(* HOLE:0x{a:x} loop invariant: facts that hold here, plus "
+                    f"cycle_count_of_trace t' = closed form *) FILL_ME")
+        prefix, body = tim
+        rhs = f"{prefix} + i * ({body})" if prefix else f"i * ({body})"
+        iv = self.induction_var(a)
+        parts = [f"(* HOLE:0x{a:x} loop invariant. Per-iteration body time is FIXED: ({body}); "
+                 f"pre-loop time: ({prefix or '0'})."]
+        if iv:
+            reg, step = iv
+            parts.append(f"FIX #2 (array/pointer): introduce an index `exists i, i <= len /\\ "
+                         f"(s {reg}) = base + i * {step} /\\ cycle_count_of_trace t' = {rhs}`; the "
+                         f"discharge instantiates the witness i := ((s {reg}) - base) / {step}.")
+        else:
+            parts.append(f"use `exists i, i <= len /\\ cycle_count_of_trace t' = {rhs}`.")
+        if self.data_dependent_exit(a):
+            parts.append("FIX #3 (search/early-exit): the exit is data-dependent — case-split with "
+                         "`decide` on the loaded predicate; the bound is a `<=` over the length.")
+        if self.aliased_stores(a):
+            parts.append("FIX #4 (aliasing): the body stores through a pointer — carry "
+                         "`noverlaps`/`getmem_noverlap` side-conditions for the written addresses.")
+        return " ".join(parts) + " *) FILL_ME"
+
     def skeleton_plan(self, spec) -> SkeletonPlan:
         """Build the invariant skeleton for `spec`. Requires `spec.postcondition` (the pinned
         exit arm); raises a clear error if it is missing rather than guessing the claim."""
@@ -232,19 +306,7 @@ class CFG:
                 # the model never has to guess it. We give it as authoritative GUIDANCE but leave the
                 # arm free-form (a single FILL_ME) so the model can still shape the conjuncts/`exists`
                 # to whatever the discharge needs — forcing a rigid template breaks proof reuse.
-                tim = self.loop_timing(a)
-                if tim is not None:
-                    prefix, body = tim
-                    rhs = f"{prefix} + (<counter>) * ({body})" if prefix else f"(<counter>) * ({body})"
-                    hint = (
-                        f"(* HOLE:0x{a:x} loop invariant: the register/bound/memory facts that hold "
-                        f"here, AND `cycle_count_of_trace t' = {rhs}` where the pre-loop time and the "
-                        f"per-iteration body time are FIXED (shown); pick <counter> = the loop "
-                        f"counter, e.g. (s R_A5), or introduce an index `i` (exists i, ... i<=len "
-                        f"... = the pointer offset) and use i. *) FILL_ME")
-                else:
-                    hint = (f"(* HOLE:0x{a:x} loop invariant: facts that hold here, plus "
-                            f"cycle_count_of_trace t' = closed form *) FILL_ME")
+                hint = self._loop_arm_hint(a)
             elif a in joins:
                 hint = (f"(* HOLE:0x{a:x} branch-join invariant: the register/memory facts that hold "
                         f"here, plus cycle_count_of_trace t' = closed form *) FILL_ME")

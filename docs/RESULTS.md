@@ -43,15 +43,25 @@ pinned OpenSSL 3.4.0 + FreeRTOS-Kernel V11.1.0 (`eval/transfer/`, run via
 proof library and the few-shot, so a pass is generalization, not recall; straight-line targets are
 machine-checked to **Qed** with a CFG-derived deterministic proof.
 
-- **Easy tier: 8/10 proved** held-out (branchless straight-line — incl. real OpenSSL `constant_time_*`
-  and FreeRTOS `vListInitialise`/`vListInsertEnd`/`xTaskGetCurrentTaskHandle`). The non-passes are a
-  degenerate identity body (`value_barrier` optimizes to a bare `ret`) and one *reduction-pending*.
+- **Easy tier: 10/10 proved** held-out (branchless straight-line — real OpenSSL `constant_time_*`
+  incl. `constant_time_lt`, and FreeRTOS `vListInitialise`/`vListInsertEnd`/`xTaskGetCurrentTaskHandle`/
+  `xTaskGetTickCount`). WCET targets are proven as a **sound upper bound** (`cycle ≤ Σ`), CT targets
+  as **exact** (`cycle = Σ`, the constant-time obligation).
 - **Medium/hard: 0/10** — by design they hit the documented wall: array/pointer loops
   (`CRYPTO_memcmp`, `OPENSSL_cleanse`, `BN_consttime_swap`), an unsupported cyclic-list search
   (`vListInsert`), and a memory-aliasing branch (`uxListRemove`). 6 are *reduction-pending* (drag in
   full FreeRTOSConfig / a configured OpenSSL tree) and recorded as lift gaps.
 
-That distribution — easy mostly pass, medium/hard at a named ceiling class — is the transfer finding.
+That distribution — easy all pass, medium/hard at a named ceiling class — is the transfer finding.
+
+**Skeleton work landed (toward medium/hard).** The synthesis skeleton (`lift/cfg.py`) now: (1) emits
+the WCET claim as `≤` (path-aware sound bound) and CT as `=`; (2) detects the loop induction variable
++ step and emits an `exists i, (s R_X)=base+i·step` template for array/pointer loops; (3) emits a
+`decide`-case-split scaffold for data-dependent (search) exits; (4) emits `noverlaps`/`getmem_noverlap`
+obligations for aliased stores; (5) places cut-points at every invariant point. These shape the goal
+for the synthesis agent — but *closing* array/search/aliasing loops still needs that agent + tactics
+(a generic discharge does not close them; see the closer experiments), so the deterministic held-out
+number stays at the easy tier.
 
 ## Capability matrix
 

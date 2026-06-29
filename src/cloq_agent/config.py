@@ -40,7 +40,7 @@ class ModelCfg:
     base_url: str = "http://localhost:11434/v1"
     api_key: str = "ollama"
     name: str = "qwen3-coder:30b"
-    temperature: float = 0.2
+    temperature: float | None = 0.2     # None -> omit (some models, e.g. Opus 4.8, forbid it)
     max_tokens: int = 1024
     escalation: EscalationCfg = field(default_factory=EscalationCfg)
 

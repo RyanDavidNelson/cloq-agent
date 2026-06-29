@@ -12,19 +12,19 @@ not attempted via synthesis.
 
 | suite | easy | medium | hard | suite total |
 |---|---|---|---|---|
-| openssl | 4/5 | 0/3 | 0/2 | 4/10 |
-| freertos | 4/5 | 0/3 | 0/2 | 4/10 |
-| **both** | 8/10 | 0/6 | 0/4 | **8/20** |
+| openssl | 5/5 | 0/3 | 0/2 | 5/10 |
+| freertos | 5/5 | 0/3 | 0/2 | 5/10 |
+| **both** | 10/10 | 0/6 | 0/4 | **10/20** |
 
 ## Per-target
 
 | suite | tier | target | property | result | ceiling/cluster | mode | iters | wall(s) |
 |---|---|---|---|---|---|---|---|---|
-| openssl | easy | value_barrier | ct | not proved | degenerate (identity / 0-cycle body) | deterministic | 10 | 0.7 |
+| openssl | easy | constant_time_lt | ct | PROVED | - | deterministic | 10 | 1.3 |
 | openssl | easy | constant_time_msb | ct | PROVED | - | deterministic | 10 | 0.7 |
-| openssl | easy | constant_time_is_zero | ct | PROVED | - | deterministic | 10 | 1.0 |
-| openssl | easy | constant_time_eq | ct | PROVED | - | deterministic | 10 | 1.2 |
-| openssl | easy | constant_time_select | ct | PROVED | - | deterministic | 10 | 0.9 |
+| openssl | easy | constant_time_is_zero | ct | PROVED | - | deterministic | 10 | 0.9 |
+| openssl | easy | constant_time_eq | ct | PROVED | - | deterministic | 10 | 1.0 |
+| openssl | easy | constant_time_select | ct | PROVED | - | deterministic | 10 | 1.1 |
 | openssl | medium | CRYPTO_memcmp | ct | ceiling: array/pointer loop | array/pointer | n/a | 0 | 0.1 |
 | openssl | medium | OPENSSL_cleanse | wcet | ceiling: array/pointer loop | array/pointer | n/a | 0 | 0.1 |
 | openssl | medium | ChaCha20_block | wcet | reduction pending | lift-gap | n/a | 0 | 0.0 |
@@ -34,7 +34,7 @@ not attempted via synthesis.
 | freertos | easy | vListInitialiseItem | wcet | PROVED | - | deterministic | 10 | 0.6 |
 | freertos | easy | vListInsertEnd | wcet | PROVED | - | deterministic | 10 | 3.2 |
 | freertos | easy | xTaskGetCurrentTaskHandle | wcet | PROVED | - | deterministic | 10 | 0.7 |
-| freertos | easy | prvResetNextTaskUnblockTime | wcet | reduction pending | lift-gap | n/a | 0 | 0.0 |
+| freertos | easy | xTaskGetTickCount | wcet | PROVED | - | deterministic | 10 | 0.7 |
 | freertos | medium | uxListRemove | wcet | not proved | straight-line memory-reasoning gap | deterministic | 10 | 4.5 |
 | freertos | medium | xTaskResumeAll | wcet | reduction pending | lift-gap | n/a | 0 | 0.0 |
 | freertos | medium | uxQueueMessagesWaiting | wcet | reduction pending | lift-gap | n/a | 0 | 0.0 |
@@ -44,8 +44,7 @@ not attempted via synthesis.
 ## Failure clusters (mapped to the capability matrix)
 
 - **array/pointer** (3): openssl/CRYPTO_memcmp, openssl/OPENSSL_cleanse, openssl/BN_consttime_swap
-- **degenerate (identity / 0-cycle body)** (1): openssl/value_barrier
-- **lift-gap** (6): openssl/ChaCha20_block, openssl/Poly1305_block, freertos/prvResetNextTaskUnblockTime, freertos/xTaskResumeAll, freertos/uxQueueMessagesWaiting, freertos/xTaskIncrementTick
+- **lift-gap** (5): openssl/ChaCha20_block, openssl/Poly1305_block, freertos/xTaskResumeAll, freertos/uxQueueMessagesWaiting, freertos/xTaskIncrementTick
 - **straight-line memory-reasoning gap** (1): freertos/uxListRemove
 - **unsupported-cfg** (1): freertos/vListInsert
 

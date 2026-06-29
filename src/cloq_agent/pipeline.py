@@ -108,7 +108,7 @@ def _prove_from_compiled(
     Every ceiling class is attempted (not short-circuited); a known limitation is labelled as an
     expected failure with the residual goal, rather than presented as a crash."""
     # --- lift stage ---
-    lr = intake.lift(compiled, repo_root)
+    lr = intake.lift(compiled, repo_root, prop=prop)
     if not lr.ok:
         rep.stage("lift", Status.FAILED, lr.error or "lift failed")
         rep.error = lr.error
@@ -119,14 +119,16 @@ def _prove_from_compiled(
     rep.ceiling_class = lr.ceiling.value
 
     # --- classify stage (informational; we attempt every class) ---
-    expected_fail = not lr.ceiling.provable
+    # In scope = a deterministic CFG-derived invariant exists (straight-line OR counter loop).
+    expected_fail = lr.invariant is None
     if expected_fail:
         why = CEILING_HELP.get(lr.ceiling, "outside the engine's current reach")
         rep.stage("classify", Status.LIMITATION,
                   f"{lr.ceiling.value} (expected failure: {why}); attempting anyway")
     else:
-        rep.stage("classify", Status.OK, f"{lr.ceiling.value} (in scope)")
-    rep.predicted_cycles = (lr.postcondition or "").replace("cycle_count_of_trace t' = ", "") or None
+        scope = "counter loop, derived invariant" if lr.ceiling.value == "counter-loop" else "in scope"
+        rep.stage("classify", Status.OK, f"{lr.ceiling.value} ({scope})")
+    rep.predicted_cycles = (lr.postcondition or "").replace("cycle_count_of_trace t' ", "") or None
     rep.predicted_range = neorv32_cycle_range(lr.postcondition)
 
     # --- write + compile the scaffolding so the theorem can be stated ---

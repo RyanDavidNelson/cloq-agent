@@ -125,7 +125,7 @@ def run_target(suite: str, t: dict, workdir: Path, out: Path) -> tuple[Result, P
 
     cr = load_machine_code(obj, t["func"])
     rep.toolchain_version = cr.toolchain_version
-    lr = intake.lift(cr, ROOT)
+    lr = intake.lift(cr, ROOT, prop=t["property"])
     if not lr.ok:
         rep.stage("lift", Status.FAILED, lr.error or "lift failed")
         rep.error = lr.error
@@ -141,12 +141,12 @@ def run_target(suite: str, t: dict, workdir: Path, out: Path) -> tuple[Result, P
     spec = intake.build_targetspec(lr)
     (out / f"{lr.scaffold_module}.v").write_text(lr.scaffold_source)  # lifted scaffold artifact
 
-    if lr.ceiling.provable:  # straight-line: derive + machine-check a proof (held-out, no recall)
+    if lr.invariant is not None:  # straight-line OR counter loop: CFG-derived proof (held-out, no recall)
         r.in_scope = True
-        rep.predicted_cycles = (lr.postcondition or "").replace("cycle_count_of_trace t' = ", "") or None
+        rep.predicted_cycles = (lr.postcondition or "").replace("cycle_count_of_trace t' ", "") or None
         rep.predicted_range = neorv32_cycle_range(lr.postcondition)
         r.predicted_range = rep.predicted_range
-        rep.stage("classify", Status.OK, "straight-line (in scope)")
+        rep.stage("classify", Status.OK, f"{lr.ceiling.value} (CFG-derived invariant)")
         rep.stage("spec-lint", Status.OK, "non-vacuous (cycle_count constrained)")
         body = "  " + "\n    ".join(lr.proof_script) + "\n  Qed."
         thm = f"Tr_{spec.name.capitalize()}_gen"

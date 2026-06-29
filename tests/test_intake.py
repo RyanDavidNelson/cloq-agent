@@ -154,3 +154,69 @@ def test_slice_keeps_local_labels_drops_other_functions():
     cfg = _cfg(sliced)
     assert cfg.loop_headers == [0x14]
     assert intake.classify(cfg) is Ceiling.ARRAY_POINTER
+
+
+# --- skeleton fixes #2-#4: loop-shape detection for the synthesis hint -----------------------
+STORE_LOOP = """\
+00000000 <wr>:
+   0:\t00a7a023          \tsw\tzero,0(a5)
+   4:\t00478793          \taddi\ta5,a5,4
+   8:\tfed792e3          \tbne\ta5,a3,0 <wr>
+   c:\t00008067          \tjalr\tzero,0(ra)
+"""
+
+SEARCH_LOOP = """\
+00000000 <find>:
+   0:\t0007a703          \tlw\ta4,0(a5)
+   4:\t00b70863          \tbeq\ta4,a1,18 <found>
+   8:\t00478793          \taddi\ta5,a5,4
+   c:\tfed792e3          \tbne\ta5,a3,0 <find>
+  10:\t00008067          \tjalr\tzero,0(ra)
+00000018 <found>:
+  18:\t00008067          \tjalr\tzero,0(ra)
+"""
+
+
+def test_induction_var_detected():
+    cfg = _cfg(ARRAY_LOOP)
+    h = cfg.loop_headers[0]
+    iv = cfg.induction_var(h)
+    assert iv == ("R_A5", 4)          # addi a5,a5,4
+
+
+def test_aliased_stores_and_no_data_exit_for_store_loop():
+    cfg = _cfg(STORE_LOOP)
+    h = cfg.loop_headers[0]
+    assert cfg.aliased_stores(h) is True
+    assert cfg.data_dependent_exit(h) is False
+    assert cfg.induction_var(h) == ("R_A5", 4)
+
+
+def test_data_dependent_exit_for_search_loop():
+    cfg = _cfg(SEARCH_LOOP)
+    h = cfg.loop_headers[0]
+    assert cfg.data_dependent_exit(h) is True       # load + >1 exit edge
+    assert cfg.aliased_stores(h) is False
+
+
+def test_loop_arm_hint_specialises_by_shape():
+    # array/pointer: exists-index template naming the detected IV (fix #2)
+    h = _cfg(ARRAY_LOOP).loop_headers[0]
+    hint = _cfg(ARRAY_LOOP)._loop_arm_hint(h)
+    assert "FIX #2" in hint and "exists i" in hint and "R_A5" in hint
+    # aliasing store loop: noverlap obligation (fix #4)
+    sh = _cfg(STORE_LOOP)
+    assert "FIX #4" in sh._loop_arm_hint(sh.loop_headers[0])
+    # search loop: case-split scaffold (fix #3)
+    se = _cfg(SEARCH_LOOP)
+    assert "FIX #3" in se._loop_arm_hint(se.loop_headers[0])
+
+
+def test_wcet_uses_upper_bound_ct_uses_exact():
+    # Fix #1: straight-line WCET asserts `<=` (sound upper bound), CT asserts `=` (constant-time).
+    cfg = _cfg(STRAIGHT)
+    total = cfg.straightline_cycles()
+    wcet = intake.straightline_invariant("f", cfg, f"cycle_count_of_trace t' <= {total}")
+    ct = intake.straightline_invariant("f", cfg, f"cycle_count_of_trace t' = {total}")
+    assert "<=" in wcet and "cycle_count_of_trace t' = 0" in wcet   # entry arm stays exact 0
+    assert "<=" not in ct
