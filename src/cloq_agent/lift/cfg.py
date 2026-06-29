@@ -365,17 +365,31 @@ class CFG:
         return bool(self.loop_mem_ops(header) & _STORES)
 
     def _natural_loop(self, header: int) -> set[int]:
-        """Block starts of the natural loop(s) of `header`: header plus every block that can reach
-        a back-edge tail without passing through header. Pure CFG structure."""
-        preds = self._preds()
-        loop = {header}
-        stack = [s for s, t in self.back_edges if t == header]
+        """The loop body of `header`: the strongly-connected set of blocks that are BOTH reachable
+        from the header (forward) and can reach it (backward, via the back-edge). The SCC is the
+        robust definition of a loop body: it is invariant to compiler loop ROTATION, where gcc's
+        `j` into the loop body past the header gives the preheader a path to the back-edge tail —
+        a one-directional 'can reach the back-edge tail' walk (the textbook natural-loop algorithm)
+        then wrongly pulls that preheader into the loop and corrupts the per-iteration body. The
+        backward reachability naturally excludes pre-loop blocks (the header cannot reach back to
+        them). Verified byte-identical to the prior definition on every non-rotated loop in the
+        suite (addloop / ct_swap / find_in_array / ap_ptr_walk)."""
+        fwd = self._reachable(header, forward=True)
+        bwd = self._reachable(header, forward=False)
+        return (fwd & bwd) | {header}
+
+    def _reachable(self, start: int, *, forward: bool) -> set[int]:
+        """Block starts reachable from `start` following successors (`forward`) or predecessors."""
+        preds = None if forward else self._preds()
+        seen, stack = {start}, [start]
         while stack:
             n = stack.pop()
-            if n not in loop:
-                loop.add(n)
-                stack.extend(preds.get(n, []))
-        return loop
+            nbrs = self.blocks[n].succ if forward else preds.get(n, [])
+            for m in nbrs:
+                if m is not None and m in self.blocks and m not in seen:
+                    seen.add(m)
+                    stack.append(m)
+        return seen
 
     def search_loop_timing(self, header: int) -> "SearchTiming | None":
         """Derive the DISJUNCTIVE timing of a data-dependent search loop (GAP 2). The found and
