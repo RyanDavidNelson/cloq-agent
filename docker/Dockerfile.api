@@ -1,0 +1,38 @@
+# Backend API service. Based on the pinned RISC-V toolchain image base so the compile stage works
+# in-process; Python + the api/rag extras layer on top. The prove stage reaches the rocq
+# pet-server over the network (CLOQ_PETANQUE_HOST) and a model via CLOQ_MODEL_BASE_URL.
+#
+# NOTE: `coqc` (for compiling the generated scaffolding) and the vendored Picinae .vo live in the
+# rocq image, not here, so a *full* proof needs the rocq toolchain co-located/reachable; without it
+# the report stops cleanly at the scaffolding stage (a clean diagnostic, by design). Compile / lift
+# / classify / structured diagnostics all work here.
+FROM debian:trixie-slim@sha256:28de0877c2189802884ccd20f15ee41c203573bd87bb6b883f5f46362d24c5c2
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf \
+        python3 python3-pip git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN { riscv64-unknown-elf-gcc --version | head -1; \
+      riscv64-unknown-elf-objdump --version | head -1; } > /etc/cloq-toolchain-version
+
+RUN pip install --no-cache-dir --break-system-packages uv
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY api ./api
+COPY eval ./eval
+COPY config ./config
+# The lift stage shells the vendored lifter; coqc + the Picinae .vo live in the rocq image, so a
+# full proof needs that reachable, but the lifter alone lets compile/lift/classify run here.
+COPY vendor/picinae/riscv_lifter.sh ./vendor/picinae/riscv_lifter.sh
+# Just the api extra: the engine's retrieval falls back to a hash embedder when
+# sentence-transformers (the heavy `rag` extra / torch) is absent, so the service stays lean.
+RUN uv pip install --system --break-system-packages -e ".[api]"
+
+# Default to the cloud-API profile (config/api.yaml); compose + .env supply the key/overrides.
+# Don't hardcode CLOQ_MODEL_BASE_URL here — that would override the profile/.env.
+ENV CLOQ_PETANQUE_HOST=rocq \
+    CLOQ_PROFILE=api
+EXPOSE 8000
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

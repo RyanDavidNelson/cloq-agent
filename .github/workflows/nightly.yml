@@ -1,0 +1,46 @@
+# Nightly regression gate: re-run the LLM eval groups and fail if a previously-passing target
+# regresses. The pinned pass set lives in eval/regression_gate.py (list_easy_four 3/4,
+# loop_easy 1/3).
+#
+# This needs a model server (Ollama qwen3-coder on the host GPU) and a reachable pet-server, so
+# it runs on a SELF-HOSTED runner — hosted runners have neither a GPU nor Ollama. Label such a
+# runner with [self-hosted, cloq] and make sure Ollama is serving on the host before the schedule.
+name: nightly
+
+on:
+  schedule:
+    - cron: "17 7 * * *" # 07:17 UTC daily
+  workflow_dispatch:
+
+jobs:
+  regression:
+    runs-on: [self-hosted, cloq]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Bring up the proof engine (rocq + pet-server)
+        run: docker compose -f docker/compose.yaml up -d --build rocq
+
+      - name: Wait for pet-server
+        run: |
+          for i in $(seq 1 60); do
+            if (exec 3<>/dev/tcp/127.0.0.1/8765) 2>/dev/null; then echo "pet-server up"; exit 0; fi
+            sleep 5
+          done
+          echo "pet-server did not come up on :8765" >&2
+          exit 1
+
+      # Run both eval groups in one invocation (one combined runs/eval_*.json). The CLI exits
+      # non-zero because the groups are intentionally partial-pass, so don't gate on it here.
+      - name: Run eval (list_easy_four + loop_easy)
+        run: docker compose -f docker/compose.yaml run --rm agent eval list_easy_four loop_easy || true
+
+      - name: Regression gate
+        run: python3 eval/regression_gate.py --out-dir runs
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker/compose.yaml down

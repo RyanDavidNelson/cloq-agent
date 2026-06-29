@@ -9,6 +9,11 @@
 -I ../vendor/picinae/timing/examples/crypto/ct_swap
 -I ../vendor/picinae/timing/examples/FreeRTOS
 -I ../vendor/picinae/timing/examples/FreeRTOS/list
+# C-intake: generated program scaffolding (<func>_lifted.vo) is written + coqc'd here, so a
+# generated theorem can `Require Import <func>_lifted`. A recursive -R mapping (not -I/-Q) is
+# required: bare Requires resolve by suffix-matching a logical path under an -R root, and
+# `targets/` is not otherwise under the vendored -R root.
+-R targets Targets
 
 -arg -w -arg -notation-overridden
 -arg -w -arg -deprecated-since-8.20

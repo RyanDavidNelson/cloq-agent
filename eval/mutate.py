@@ -13,7 +13,6 @@ lift -> prove -> measure pipeline the way a real leak would.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 
 @dataclass

@@ -1,0 +1,15 @@
+# Profile: api  (CLOQ_PROFILE=api or --profile api)
+#
+# Cloud-API: a hosted, OpenAI-compatible model is the primary — no Ollama, no GPU. Escalation is
+# OFF (the primary is already the strong model). Overlaid on default.yaml. The key and (optionally)
+# the model name / endpoint come from env: CLOQ_API_KEY, CLOQ_MODEL_NAME, CLOQ_MODEL_BASE_URL
+# (see .env.example). Defaults below target Anthropic's OpenAI-compatible endpoint.
+
+model:
+  base_url: https://api.anthropic.com/v1   # override with CLOQ_MODEL_BASE_URL (any OpenAI-compatible API)
+  api_key: ""                               # injected from env CLOQ_API_KEY
+  name: claude-opus-4-8                      # override with CLOQ_MODEL_NAME
+  escalation:                                # off: primary is already the strong model
+    base_url: null
+    name: null
+    api_key: null

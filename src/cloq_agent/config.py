@@ -151,16 +151,64 @@ def _apply_escalation_env(cfg: Config) -> None:
     if "CLOQ_ESCALATION_NAME" in os.environ:
         esc.name = os.environ["CLOQ_ESCALATION_NAME"]
     key = (os.environ.get("CLOQ_ESCALATION_API_KEY")
+           or os.environ.get("CLOQ_API_KEY")
            or os.environ.get("ANTHROPIC_API_KEY")
            or os.environ.get("OPENAI_API_KEY"))
     if key:
         esc.api_key = key
 
 
-def load_config(path: str | os.PathLike | None = None) -> Config:
-    src = Path(path) if path else DEFAULT_CONFIG
-    data = yaml.safe_load(src.read_text()) if src.exists() else {}
+def _apply_key_env(cfg: Config) -> None:
+    """`CLOQ_API_KEY` is the one canonical key var (see .env.example). It sets the PRIMARY model's
+    key — which is what the `api` (cloud-primary) profile needs; it is harmless for the `local`
+    profile (Ollama ignores the key, and the escalation block picks the key up separately)."""
+    key = os.environ.get("CLOQ_API_KEY")
+    if key:
+        cfg.model.api_key = key
+
+
+def _deep_merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _deep_merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def resolve_out_dir(out_dir: str, repo_root: str | os.PathLike) -> Path:
+    """Resolve an `eval.out_dir` config value to a real path. A relative value (the default,
+    `./runs`) is taken relative to the repo root; an absolute value is honoured as-is. Avoids the
+    `str.lstrip("./")` pitfall that silently turns an absolute `/abs/path` into a relative one."""
+    p = Path(out_dir)
+    return p if p.is_absolute() else Path(repo_root) / out_dir.lstrip("./")
+
+
+def load_config(path: str | os.PathLike | None = None, profile: str | None = None) -> Config:
+    """Load configuration, then apply `CLOQ_*` env overrides.
+
+    Resolution order:
+      * explicit `path`  -> that file alone (back-compatible `--config` behaviour);
+      * else a `profile` (arg or `CLOQ_PROFILE` env), e.g. `local` / `api` -> `config/<profile>.yaml`
+        OVERLAID on `config/default.yaml` (so a profile only states what differs);
+      * else `config/default.yaml` (unchanged default behaviour).
+    """
+    profile = profile or os.environ.get("CLOQ_PROFILE")
+    base = yaml.safe_load(DEFAULT_CONFIG.read_text()) if DEFAULT_CONFIG.exists() else {}
+
+    if path:
+        data = yaml.safe_load(Path(path).read_text()) or {}
+    elif profile:
+        prof_path = DEFAULT_CONFIG.parent / f"{profile}.yaml"
+        if not prof_path.exists():
+            raise FileNotFoundError(
+                f"unknown config profile '{profile}' (looked for {prof_path}). "
+                f"known profiles: local, api"
+            )
+        data = _deep_merge(base or {}, yaml.safe_load(prof_path.read_text()) or {})
+    else:
+        data = base or {}
+
     cfg = _build(Config, data or {})
     _apply_env(cfg)
     _apply_escalation_env(cfg)
+    _apply_key_env(cfg)
     return cfg

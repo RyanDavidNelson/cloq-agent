@@ -20,6 +20,10 @@ fpga/**/.Xil/
 *.elf
 *.bin
 
+# GUI build artifacts
+gui/node_modules/
+gui/dist/
+
 # Local secrets / API keys — never commit (public repo)
 .env
 .env.*

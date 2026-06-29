@@ -1,0 +1,30 @@
+# RISC-V bare-metal toolchain for the C-intake stage: compile uploaded C to a RV32 object, then
+# objdump it for the lifter. We use the riscv64-unknown-elf cross-gcc with `-mabi=ilp32`
+# (the task-sanctioned alternative to a separate riscv32 build); multilib gives us the rv32 libs.
+#
+# PINNING: the toolchain version is part of the timing model's trusted base — a different gcc can
+# pick different instructions and silently shift the cycle count. The exact version is captured at
+# build time into /etc/cloq-toolchain-version (and printed by `compile.py`), and the Debian base is
+# pinned by digest-bearing tag so rebuilds are reproducible. If you bump either, re-derive the
+# timing model and note it (CLAUDE.md golden rule #4).
+# trixie-slim: gcc-riscv64-unknown-elf 14.2.0 + binutils 2.44 — new enough to know the
+# `zicntr` march extension (bookworm's binutils 2.40 does not). Digest-pinned for reproducibility.
+FROM debian:trixie-slim@sha256:28de0877c2189802884ccd20f15ee41c203573bd87bb6b883f5f46362d24c5c2
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc-riscv64-unknown-elf \
+        binutils-riscv64-unknown-elf \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Record the exact toolchain version into the image so the compile stage can stamp it into the
+# report (provenance for the cycle counts).
+RUN { riscv64-unknown-elf-gcc --version | head -1; \
+      riscv64-unknown-elf-objdump --version | head -1; } > /etc/cloq-toolchain-version \
+    && cat /etc/cloq-toolchain-version
+
+ENV CLOQ_RISCV_GCC=riscv64-unknown-elf-gcc \
+    CLOQ_RISCV_OBJDUMP=riscv64-unknown-elf-objdump
+
+WORKDIR /work
+CMD ["riscv64-unknown-elf-gcc", "--version"]

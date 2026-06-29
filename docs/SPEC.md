@@ -153,8 +153,7 @@ cloq-agent/
 │   ├── harness.py               # run agent over targets, collect metrics
 │   ├── mutate.py                # inject timing leaks for non-triviality test
 │   └── ablations.py             # RAG on/off, hammer-first on/off, model tier
-├── ci/
-│   └── .gitlab-ci.yml           # lint → build → prove smoke set → regression gate
+├── .github/workflows/          # ci.yml (lint → pytest → rocq smoke), build.yml, nightly.yml
 └── docs/
     ├── SPEC.md                  # this file
     └── results/                 # dashboards, ablation tables

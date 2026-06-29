@@ -128,6 +128,38 @@ class CFG:
                     preds[t].append(s)
         return preds
 
+    def natural_loop(self, header: int) -> set[int]:
+        """Public view of the natural-loop block set for `header` (for the C-intake classifier)."""
+        return self._natural_loop(header)
+
+    def loop_exit_edges(self, header: int) -> list[tuple[int, int]]:
+        """Edges (src, dst) that leave the natural loop of `header`. A pure counter loop has
+        exactly one such edge (the loop-condition branch); a data-dependent early-exit (search)
+        loop has more. Derived from the CFG, never the model."""
+        loop = self._natural_loop(header)
+        out: list[tuple[int, int]] = []
+        for s in loop:
+            for t in self.blocks[s].succ:
+                if t is not None and t not in loop:
+                    out.append((s, t))
+        return out
+
+    def straightline_cycles(self) -> str:
+        """The summed Coq timing term for a straight-line (loop-free) body: the per-instruction
+        constants of every instruction that executes before an exit/return, in address order. This
+        is the pinned WCET closed form for a straight-line function — CFG-derived, so the model
+        never supplies it. Empty string if no instruction carries a modeled cost."""
+        exits = set(self.exit_points())
+        terms: list[str] = []
+        all_insns = sorted((i for b in self.blocks.values() for i in b.insns), key=lambda i: i.addr)
+        for ins in all_insns:
+            if ins.addr in exits:
+                continue  # the exit arm holds the count of everything BEFORE the return
+            term = _insn_tconst(ins, None)
+            if term:
+                terms.append(term)
+        return " + ".join(terms)
+
     def _natural_loop(self, header: int) -> set[int]:
         """Block starts of the natural loop(s) of `header`: header plus every block that can reach
         a back-edge tail without passing through header. Pure CFG structure."""

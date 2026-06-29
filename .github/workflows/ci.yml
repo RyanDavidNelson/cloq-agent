@@ -1,0 +1,63 @@
+# CI: lint -> python tests -> rocq smoke proof. Ported from .gitlab-ci.yml.
+# rocq-smoke is a real gate (addloop must prove); it is NOT allow_failure.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      # `api/` does not exist yet (Phase 2); lint it only once it lands so the job stays green
+      # on a clean clone while honoring the documented `ruff check src eval api` target.
+      - run: ruff check src eval $( [ -d api ] && echo api )
+
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install uv
+      # `[dev]` pulls pytanque from git (see [tool.uv.sources]); git is preinstalled on the runner.
+      - run: uv pip install --system -e ".[dev]"
+      # The integration-search tests skip automatically when no pet-server is reachable, which is
+      # the case on a hosted runner. Everything else must pass.
+      - run: pytest -q tests
+
+  rocq-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: docker/setup-buildx-action@v3
+      # Build the rocq image (Picinae/Cloq + the addloop timing proof prebuilt), caching layers
+      # in the GitHub Actions cache so reruns are fast.
+      - name: Build rocq image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.rocq
+          tags: cloq-rocq:ci
+          load: true
+          cache-from: type=gha,scope=rocq
+          cache-to: type=gha,mode=max,scope=rocq
+      # The smoke gate: addloop closes end-to-end against the prebuilt Picinae .vo files.
+      - name: Build addloop (make smoke)
+        run: docker run --rm cloq-rocq:ci bash -lc "eval \$(opam env) && make -C /work/proofs smoke"

@@ -16,7 +16,8 @@ dependencies = [
 rag = ["sentence-transformers>=3.0"]     # local embeddings (else falls back to /v1/embeddings)
 mine = ["coqpyt"]                        # richer corpus extraction (else regex fallback)
 fpga = ["pynq>=3.0"]                     # runs on the AUP-ZU3 PS, not the dev workstation
-dev = ["pytest>=8.0", "ruff>=0.6"]
+api = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "python-multipart>=0.0.9"]  # backend service
+dev = ["pytest>=8.0", "ruff>=0.6", "fastapi>=0.110", "python-multipart>=0.0.9", "httpx>=0.27"]
 
 [project.scripts]
 cloq-agent = "cloq_agent.cli:main"
@@ -32,6 +33,15 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/cloq_agent"]
 
+[tool.pytest.ini_options]
+# `eval/` is an in-repo package (not installed by `pip install -e`), so put the repo root on
+# sys.path; otherwise `from eval.targets import ...` fails under CI's clean checkout.
+pythonpath = ["."]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint.per-file-ignores]
+# Package __init__.py files are pure re-export surfaces; the imports are the public API.
+"__init__.py" = ["F401"]

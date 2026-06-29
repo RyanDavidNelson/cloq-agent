@@ -40,6 +40,10 @@ class ProofResult:
     wall_s: float
     proof_script: list[str] = field(default_factory=list)
     error: str | None = None
+    # The last residual proof obligation when the search failed (for the diagnostic report).
+    residual_goal: str | None = None
+    # True when the solved invariant+proof was persisted into the RAG corpus (success only).
+    stored_to_corpus: bool = False
 
 
 @dataclass
@@ -169,9 +173,10 @@ class Orchestrator:
             if gold_proof is not None and attempt == 1:
                 outcome = run_script(driver, start.state, gold_proof)
                 if outcome.closed:
+                    stored = self._store_solved(spec, invariant_src, list(gold_proof))
                     return ProofResult(spec.name, True, attempt, len(gold_proof), llm_calls,
                                        escalated, outcome.tactic, time.time() - t0,
-                                       proof_script=list(gold_proof))
+                                       proof_script=list(gold_proof), stored_to_corpus=stored)
                 return ProofResult(spec.name, False, attempt, len(gold_proof), llm_calls,
                                    escalated, None, time.time() - t0,
                                    proof_script=list(gold_proof),
@@ -190,6 +195,8 @@ class Orchestrator:
                     if report is not None and not report.agrees:
                         res.proved = False
                         res.error = f"FPGA disagreement: {report.summary}"
+                if res.proved:
+                    res.stored_to_corpus = self._store_solved(spec, invariant_src, res.proof_script)
                 return res
             # Discharge failed (invariant type-checked but the proof didn't close); feed that back.
             last_error = res.error
@@ -197,6 +204,35 @@ class Orchestrator:
         return ProofResult(spec.name, False, self.cfg.agent.invariant_attempts, 0,
                            llm_calls, escalated, None, time.time() - t0,
                            error="exhausted invariant attempts")
+
+    def _store_solved(self, spec: TargetSpec, invariant_src: str,
+                      proof_script: list[str] | None) -> bool:
+        """Persist a solved invariant + proof into the RAG corpus so the *next* retrieve can reuse
+        it (skill accumulation). Adds one `proof` record to the live store and saves it to the
+        mounted `rag_store/` volume. Best-effort: a corpus write must never fail a sound proof.
+        """
+        from ..rag.store import Record
+
+        try:
+            store = self.retriever.store
+            body = "\n".join(proof_script or [])
+            text = (
+                f"(* solved by cloq-agent: {spec.name} ({spec.theorem_name}) *)\n"
+                f"{invariant_src.strip()}\n\nProof.\n{body}\nQed."
+            )
+            rec = Record(
+                id=f"solved::{spec.name}",
+                text=text,
+                kind="proof",
+                meta={"target": spec.name, "theorem": spec.theorem_name, "source": "orchestrator"},
+            )
+            store.add(rec, self.retriever.embedder.embed_one(text))
+            store.save(self.cfg.rag.store_dir)
+            log.info("[%s] added solved proof to RAG corpus -> %s", spec.name, self.cfg.rag.store_dir)
+            return True
+        except Exception as e:  # never let corpus surfacing break a proof
+            log.warning("[%s] store-back to RAG corpus failed: %s", spec.name, e)
+            return False
 
     def _discharge(self, driver, start, spec, attempt, llm_calls, escalated, t0,
                    proof_library=None) -> ProofResult:
@@ -313,8 +349,13 @@ class Orchestrator:
 
         # No path closed: surface the deepest residual obligation so the orchestrator can feed it
         # into the next synthesis attempt (verifier-guided refinement), else a budget note.
+        residual_goal = None
+        if residual:
+            g = residual[0]
+            residual_goal = (g.conclusion or g.pretty or "").strip() or None
         return ProofResult(spec.name, False, attempt, nodes, llm_calls + repair_calls,
                            escalated, None, time.time() - t0, proof_script=deepest,
+                           residual_goal=residual_goal,
                            error=_unproved_goal_msg(residual) if residual else "search budget exhausted")
 
 

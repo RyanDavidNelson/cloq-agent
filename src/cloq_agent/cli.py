@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -106,6 +107,28 @@ def cmd_doctor(args) -> int:
     return 0
 
 
+def cmd_prove_c(args) -> int:
+    """compile -> lift -> classify -> (prove | structured diagnostic) for an uploaded C unit."""
+    from .pipeline import run_prove_c
+
+    cfg = load_config(args.config)
+    rep = run_prove_c(c_path=args.file, func=args.function, cfg=cfg, repo_root=_repo_root(),
+                      prop=args.property, secret=args.secret)
+
+    print(rep.render())
+    from .config import resolve_out_dir
+    out = resolve_out_dir(cfg.eval.out_dir, _repo_root()) / "prove_c" / args.function
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "report.json").write_text(rep.to_json())
+        (out / "report.md").write_text(rep.to_markdown())
+        (out / "report.html").write_text(rep.to_html())
+        console.print(f"[dim]report written to {out}[/dim]")
+    except OSError as e:
+        console.print(f"[yellow]could not write report files: {e}[/yellow]")
+    return 0 if rep.proved else 1
+
+
 def cmd_eval(args) -> int:
     from eval.harness import run_eval
     from eval.targets import resolve_selectors
@@ -131,7 +154,9 @@ def main(argv: list[str] | None = None) -> int:
     _agent_log.propagate = False
 
     p = argparse.ArgumentParser(prog="cloq-agent")
-    p.add_argument("--config", default=None, help="path to config yaml")
+    p.add_argument("--config", default=None, help="path to config yaml (overrides --profile)")
+    p.add_argument("--profile", default=None, choices=["local", "api"],
+                   help="config profile (overlaid on default.yaml); also via CLOQ_PROFILE env")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("index", help="build the RAG corpus").set_defaults(func=cmd_index)
@@ -147,6 +172,15 @@ def main(argv: list[str] | None = None) -> int:
                          "GOLD_TARGET's gold proof (closes iff the invariant matches the gold)")
     pp.set_defaults(func=cmd_prove)
 
+    pc = sub.add_parser("prove-c", help="compile + lift + prove an uploaded C function")
+    pc.add_argument("file", help="path to a self-contained C unit")
+    pc.add_argument("--func", required=True, dest="function", help="entry function to prove")
+    pc.add_argument("--property", choices=["wcet", "ct"], default="wcet",
+                    help="WCET (default) or constant-time")
+    pc.add_argument("--secret", default=None, metavar="PARAM",
+                    help="secret parameter name (required reasoning anchor for --property ct)")
+    pc.set_defaults(func=cmd_prove_c)
+
     pe = sub.add_parser("eval", help="run the eval harness over a group/targets (default: all)")
     pe.add_argument("selectors", nargs="*", default=None,
                     help="group name (e.g. list_easy_four) or target names; empty = all targets")
@@ -154,6 +188,10 @@ def main(argv: list[str] | None = None) -> int:
     pe.set_defaults(func=cmd_eval)
 
     args = p.parse_args(argv)
+    # --profile feeds the same channel as CLOQ_PROFILE, so every command's load_config() honours it
+    # (explicit --config still wins). Set before dispatch so all code paths see it.
+    if args.profile:
+        os.environ["CLOQ_PROFILE"] = args.profile
     return args.func(args)
 
 
