@@ -82,6 +82,7 @@ def build_spec(t: dict, repo_root: Path, name: str):
 
     cfg_desc = t.get("description", "")
     skeleton = None
+    cfg = None
     objdump_rel = t.get("objdump")
     if objdump_rel:
         op = repo_root / "eval" / objdump_rel
@@ -103,6 +104,22 @@ def build_spec(t: dict, repo_root: Path, name: str):
             gold_inv = _extract_invariant(gip.read_text())
 
     gold_proof = t.get("gold_proof")  # list[str] | None
+
+    # Phase 2: emit the array-search decidability TEMPLATE from the recovered shape (instead of a
+    # hand-written per-program copy). The emitted defs are namespaced (cloq_), and the reused
+    # invariant/proof are rewritten to those names so the proof's case-split drives OUR defs.
+    st = t.get("search_template")
+    if st and cfg is not None and cfg.loop_headers:
+        from cloq_agent.lift.search_template import prefix_template_names, template_defs
+        shape = cfg.array_search_shape(cfg.loop_headers[0])
+        if shape is None:
+            raise ValueError(f"{name}: search_template set but no array shape recovered from the CFG")
+        prefix = st.get("prefix", "cloq_")
+        spec.search_defs = template_defs(shape, st["time_of"], prefix=prefix)
+        if gold_inv is not None:
+            gold_inv = prefix_template_names(gold_inv, prefix)
+        if gold_proof is not None:
+            gold_proof = [prefix_template_names(ln, prefix) for ln in gold_proof]
 
     return spec, cfg_desc, secret, gold_inv, gold_proof, skeleton
 

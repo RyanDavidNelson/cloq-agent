@@ -69,6 +69,11 @@ class TargetSpec:
     # The pinned exit-arm proposition for skeleton synthesis (the trusted WCET/ct claim). The
     # model never supplies this; it is spliced in verbatim. None disables skeleton synthesis.
     postcondition: str | None = None
+    # Coq definitions emitted INTO the functor (after the module imports, before the invariant):
+    # the Phase-2 array-search decidability template (`key_in_array`/`key_in_array_dec`/the timing
+    # disjunction), specialised to the recovered array shape. The proof's case-split then runs on
+    # these emitted defs instead of a hand-written per-program copy. None for non-search targets.
+    search_defs: str | None = None
 
 
 # NArith / Picinae_riscv are framework foundations (not program-specific), so they stay a
@@ -101,7 +106,7 @@ Module {thm}_Proof (cpu : RVCPUTimingBehavior).
   Import Inner.{timing_submodule}.
   Import Inner.{program_module}.
   Import Inner.{auto_module}.
-
+{search_defs}
 {invariant}
 
   Theorem {thm} :
@@ -232,6 +237,7 @@ def render(
         exits=spec.exit_point,
         inv_name=invariant_name,
         inv_args=" ".join(spec.inv_args) if spec.inv_args else _inv_args(spec.params),
+        search_defs=(f"\n{spec.search_defs}\n" if spec.search_defs else ""),
     )
     if proof_body is None:
         # Open proof for interactive driving: prelude only, no closer.

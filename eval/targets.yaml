@@ -331,7 +331,7 @@ find_in_array:
     - ["MEM", "s V_MEM32 = base_mem"]
     - ["LEN_VALID", "4 * len <= 2^32 - 1"]
   gold_invariant: ../vendor/picinae/timing/examples/data_structures/array/find_in_array/find_in_array_proof.v
-  gold_proof:
+  gold_proof: &fia_gold_proof
     - "intros."
     - "apply prove_invs."
     - "simpl. rewrite ENTRY. unfold entry_addr. tstep r5_step. now repeat split."
@@ -346,6 +346,34 @@ find_in_array:
     - "{ tstep r5_step. repeat (tstep r5_step). left. exists (s' R_A5). split. now apply N.ltb_lt. split. rewrite <- Preserved. now apply N.eqb_eq in BC0. now apply N.ltb_lt in BC. split. intros. rewrite <- Preserved by lia. now apply NotFound. unfold time_of_find_in_array. hammer. apply N.ltb_lt in BC. apply N.eqb_neq in BC0. repeat split; auto. intros. rewrite N.mod_small in H by lia. apply lt_impl_lt_or_eq in H. destruct H. now subst. now apply NotFound. rewrite N.mod_small by lia. lia. rewrite (N.mod_small (1 + s' R_A5)). hammer. apply N.le_lt_trans with len; lia. exfalso. destruct IN as (idx & IDX_LEN & IN). apply (NotFound idx). apply N.ltb_ge in BC. lia. assumption. }"
     - "{ tstep r5_step. do 4 (tstep r5_step). exfalso. apply NOT_IN. exists (s' R_A5). split. now apply N.ltb_lt. apply N.eqb_eq in BC0. assumption. repeat (tstep r5_step). apply N.ltb_lt in BC. apply N.eqb_neq in BC0. repeat split; auto. intros. rewrite N.mod_small in H by lia. apply lt_impl_lt_or_eq in H. destruct H. now subst. now apply NotFound. rewrite N.mod_small by lia. lia. rewrite (N.mod_small (1 + s' R_A5)). hammer. apply N.le_lt_trans with len; lia. repeat (tstep r5_step). unfold time_of_find_in_array. right. split. intro. apply NOT_IN. destruct H as (idx & IDX_LEN & IN). exists idx. split. assumption. now rewrite Preserved. replace (s' R_A5) with len in * by (rewrite N.ltb_ge in BC; lia). hammer. }"
   # WCET (key absent): taddi + len*(tfbgeu+tslli 2+tadd+tlw+tfbeq+taddi+tjal) + ttbgeu + taddi + tjalr
+  gold_cycles: null
+
+find_in_array_tmpl:
+  # Phase-2 end-to-end: identical to find_in_array, but the decidability lemmas + the found/not-found
+  # disjunction postcondition are EMITTED from the recovered array shape (`search_template`) rather
+  # than pulled from find_in_array_proof. build_spec namespaces the emitted defs (cloq_) and rewrites
+  # the reused invariant + gold_proof to those names, so the case-split `destruct (cloq_key_in_array_dec
+  # …)` drives OUR emitted defs to Qed. The lifted program + the timing closed form
+  # (time_of_find_in_array) are still reused from the vendored functor (the CFG-derived parts).
+  kind: wcet
+  description: "find_in_array with the array-search decidability emitted from the shape (Phase 2 e2e)."
+  requires: ["NEORV32", "array", "RISCVTiming", "find_in_array_proof"]
+  lifted_program: lifted_prog
+  entry_addr: 0x1e4
+  exit_point: exits
+  theorem_name: find_in_array_timing_gen
+  program_module: Program_find_in_array
+  auto_module: find_in_arrayAuto
+  objdump: targets/find_in_array.objdump
+  params: [["base_mem", "memory"], ["sp", "N", "R_SP"], ["arr", "N", "R_A0"], ["key", "N", "R_A1"], ["len", "N", "R_A2"]]
+  inv_args: ["s", "base_mem", "sp", "arr", "key", "len"]
+  entry_hyps:
+    - ["MEM", "s V_MEM32 = base_mem"]
+    - ["LEN_VALID", "4 * len <= 2^32 - 1"]
+  gold_invariant: ../vendor/picinae/timing/examples/data_structures/array/find_in_array/find_in_array_proof.v
+  search_template:
+    time_of: time_of_find_in_array
+  gold_proof: *fia_gold_proof
   gold_cycles: null
 
 find_in_array_llm:

@@ -191,11 +191,20 @@ Built (`lift/search_template.py`, `lift/cfg.py:array_search_shape`):
 - the search-loop **synthesis hint** now names the concrete emitted predicate/case-split for the
   recovered shape.
 
-Honest scope: this makes the decidability *scaffold* generic and machine-emitted (no per-program
-hand copy). The vendored search proof's leaf branches (the `apply N.ltb_lt in BC` / `N.mod_small`
-massaging) and the full end-to-end rewire (a synthesized find_in_array using the EMITTED defs
-instead of `require find_in_array_proof`) are the remaining work. **find_in_list** (needs list
-theory) and the cyclic **vListInsert** (uniqueness-in-a-cycle) stay genuinely bespoke — not promised.
+**End-to-end (the loop closed).** `theorem_builder` gained a `search_defs` injection slot; `build_spec`
+emits the template into the scaffold (namespaced `cloq_`) and rewrites the reused invariant + proof to
+those names, so the proof's case-split runs on the EMITTED decidability, not the vendored copy. The
+`find_in_array_tmpl` target proves this: it reaches **Qed 13/13** driving
+`destruct (cloq_key_in_array_dec …) as [IN | NOT_IN]` and the two branches, with the vendored
+`key_in_array_dec` / `timing_postcondition` namespaced away
+(`tests/test_search_template.py::test_find_in_array_tmpl_closes_with_emitted_decidability`). This is the
+find_in_array analogue of the ct_swap Phase-1 win: the decidability scaffold is machine-emitted from the
+recovered shape and *drives the proof to Qed*.
+
+Honest scope: the lifted **program** + the timing closed form `time_of_find_in_array` are still reused
+from the vendored functor (the CFG-derived parts); and the two branch leaf scripts are still the gold
+proof (renamed), not yet a uniform generic closer. **find_in_list** (needs list theory) and the cyclic
+**vListInsert** (uniqueness-in-a-cycle) stay genuinely bespoke — not promised.
 
 ## Next (see CLAUDE.md "Next tasks")
 

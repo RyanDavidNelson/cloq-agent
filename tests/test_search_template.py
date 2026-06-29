@@ -3,6 +3,7 @@ and emitter; a server-gated test that the emitted decidability block actually ty
 `i << 2` and `4 * i` address forms), proving `key_in_array_dec` is genericizable, not bespoke."""
 from __future__ import annotations
 
+import re
 import socket
 import sys
 from pathlib import Path
@@ -22,6 +23,7 @@ from cloq_agent.lift.search_template import (
 
 _REPO = Path(__file__).resolve().parents[1]
 _CFG = load_config()
+_TARGETS = str(_REPO / "eval" / "targets.yaml")
 _FIA_OBJDUMP = _REPO / "eval" / "targets" / "find_in_array.objdump"
 
 
@@ -77,6 +79,46 @@ def _pet_server_up() -> bool:
             return True
     except OSError:
         return False
+
+
+def test_build_spec_emits_template_and_renames_reused_invariant_and_proof():
+    """find_in_array_tmpl: build_spec emits the cloq_-namespaced decidability + disjunction into
+    spec.search_defs, and rewrites the reused gold invariant/proof to those names — so the vendored
+    `timing_postcondition` / `key_in_array_dec` are no longer what the proof drives (server-free)."""
+    from eval.targets import build_spec, load_targets
+
+    t = load_targets(_TARGETS)["find_in_array_tmpl"]
+    spec, _d, _s, gold_inv, gold_proof, _sk = build_spec(t, _REPO, "find_in_array_tmpl")
+    assert spec.search_defs is not None
+    assert "Fixpoint cloq_key_in_array_dec" in spec.search_defs
+    assert "Definition cloq_timing_postcondition" in spec.search_defs
+    assert "i << 2" in spec.search_defs                          # specialised to the shape
+    # the reused invariant now points at the EMITTED disjunction, not the vendored one
+    assert gold_inv is not None and "cloq_timing_postcondition" in gold_inv
+    assert re.search(r"(?<!cloq_)timing_postcondition", gold_inv) is None
+    # the reused proof drives the EMITTED decidability / trichotomy
+    assert any("cloq_key_in_array_dec" in ln for ln in gold_proof)
+    assert any("cloq_lt_impl_lt_or_eq" in ln for ln in gold_proof)
+
+
+@pytest.mark.skipif(not _pet_server_up(),
+                    reason=f"no pet-server at {_CFG.petanque.host}:{_CFG.petanque.port}")
+def test_find_in_array_tmpl_closes_with_emitted_decidability():
+    """Phase-2 end-to-end: the find_in_array proof reaches Qed driving the EMITTED (templated)
+    decidability + case-split, with the vendored decidability namespaced away. The scaffold the
+    prover loaded genuinely contains our emitted defs."""
+    from cloq_agent.proof.petanque_driver import PetanqueDriver
+
+    from eval.replay import replay_gold_arms
+
+    with PetanqueDriver(_CFG.petanque, default_timeout_s=_CFG.agent.tactic_timeout_s) as d:
+        rep = replay_gold_arms(d, "find_in_array_tmpl", targets_file=_TARGETS, repo_root=_REPO)
+    assert rep.started, f"theorem did not elaborate: {rep.start_error}"
+    assert rep.closed, f"emitted-template find_in_array did not reach Qed (arms: {rep.arms})"
+    scaffold = Path(rep.scaffold_path).read_text()
+    assert "Fixpoint cloq_key_in_array_dec" in scaffold          # emitted, not vendored
+    assert "cloq_timing_postcondition" in scaffold
+    assert any("cloq_key_in_array_dec" in a.tactic for a in rep.arms)   # the case-split used it
 
 
 @pytest.mark.skipif(not _pet_server_up(),

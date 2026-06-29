@@ -40,12 +40,14 @@ place. Do **not** redo any of this:
   the positional gold scripts. One unified tactic closes **both** the counter loop (addloop) and
   the **array/pointer loop (ct_swap)** with no LLM, given a correct invariant — validated
   non-vacuous by cycle-form mutation (`eval/mutate.py`, proof-only).
-- **Phase 2** (`lift/search_template.py`, `lift/cfg.py:array_search_shape`): the array-search
-  **decidability is a TEMPLATE**, not bespoke — recover the element shape (`arr + (i << 2)` vs
-  `arr + 4 * i`) from the loop body and emit `key_in_array` / `key_in_array_dec` / the found/
-  not-found disjunction `timing_postcondition` / the `destruct (key_in_array_dec …)` case-split.
-  Both address forms are verified to type-check via the pet-server. Remaining: the search proof's
-  bespoke leaf branches + the end-to-end rewire off `require find_in_array_proof`.
+- **Phase 2** (`lift/search_template.py`, `lift/cfg.py:array_search_shape`, `theorem_builder`
+  `search_defs` slot): the array-search **decidability is a TEMPLATE**, not bespoke — recover the
+  element shape (`arr + (i << 2)` vs `arr + 4 * i`) and emit `key_in_array` / `key_in_array_dec` /
+  the found/not-found disjunction / the `destruct (key_in_array_dec …)` case-split. Wired
+  end-to-end: `find_in_array_tmpl` reaches **Qed 13/13** driving the EMITTED (`cloq_`-namespaced)
+  decidability, vendored copy namespaced away — the find_in_array analogue of the ct_swap win.
+  Remaining: the two branch leaf scripts are still the (renamed) gold proof, the lifted program +
+  `time_of_find_in_array` are still reused, not generated.
 
 **Measured (in-distribution / recall-leaning, NOT held-out):**
 `cloq-agent eval list_easy_four` -> 3/4 synth (uxListRemove fails) - `eval loop_easy` -> 1/3 synth
@@ -56,9 +58,10 @@ and **array/pointer loop** (ct_swap) GIVEN a correct invariant. Remaining gaps:
 - array/pointer **end-to-end**: discharge is solved; the open part is **synthesis** emitting the
   `exists`-index invariant (the model's job, or a future deterministic array deriver);
 - search loop w/ data-dependent early exit (`find_in_array`): the decidability case-split is now
-  **templated + emitted** (Phase 2, verified to compile both address forms); remaining = the
-  bespoke leaf branches + the end-to-end rewire. `find_in_list` (list theory) and cyclic
-  `vListInsert` (uniqueness-in-a-cycle) stay genuinely bespoke;
+  **templated, emitted, and proven end-to-end** (`find_in_array_tmpl` reaches Qed on the emitted
+  defs, Phase 2); remaining = a uniform generic branch closer + generating (not reusing) the
+  program/timing. `find_in_list` (list theory) and cyclic `vListInsert` (uniqueness-in-a-cycle)
+  stay genuinely bespoke;
 - memory-aliasing branch (`uxListRemove`) — needs `noverlaps`/`getmem_noverlap` reasoning.
 
 ## Deferred (out of scope for now)
