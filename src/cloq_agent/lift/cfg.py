@@ -66,6 +66,17 @@ def _insn_tconst(ins: "Insn", taken: bool | None) -> str | None:
 
 
 @dataclass
+class SearchTiming:
+    """The disjunctive closed form of a search loop: `setup + n*body + partial + shutdown`, where
+    `n = (Some i => i | None => trip)` and only `partial` forks between the found / not-found arms."""
+    setup: str            # entry..header straight-line cost
+    body: str             # one full iteration (both branches stay in-loop)
+    found_partial: str    # last partial iteration when the data-dependent match exits
+    notfound_partial: str # last partial iteration when the structural bound exits
+    shutdown: str         # exit-target..return straight-line cost
+
+
+@dataclass
 class Insn:
     addr: int
     mnemonic: str
@@ -365,6 +376,93 @@ class CFG:
                 loop.add(n)
                 stack.extend(preds.get(n, []))
         return loop
+
+    def search_loop_timing(self, header: int) -> "SearchTiming | None":
+        """Derive the DISJUNCTIVE timing of a data-dependent search loop (GAP 2). The found and
+        not-found cycle forms share setup + n*body + shutdown and differ only in the PARTIAL last
+        iteration, which the loop's two exit edges take. Structure:
+
+            setup + (Some i => i | None => trip)*body + (Some => found_partial | None => notfound_partial) + shutdown
+
+        The discriminator is which exit edge is structural vs data-dependent: the BOUND branch
+        (index/pointer vs limit, recovered by GAP 1) is the not-found exit; the OTHER exiting branch
+        is the data-dependent match, the found exit. Each partial is the cost of the iteration prefix
+        up to its exit branch, that branch costed at whichever direction (taken/fallthrough) LEAVES
+        the loop. Returns None unless the loop is a clean 2-exit search (bound test + match test).
+
+        Validated to reproduce the vendored `time_of_find_in_array` term-for-term (the oracle)."""
+        if header not in self.loop_headers:
+            return None
+        loop = self._natural_loop(header)
+        loop_insns = sorted((i for s in loop for i in self.blocks[s].insns if i.addr >= header),
+                            key=lambda i: i.addr)
+        # exit branches: a conditional branch with EITHER edge leaving the loop (taken OR fallthrough)
+        exits = [ins for ins in loop_insns if ins.mnemonic in _BRANCH_OPS
+                 and (_branch_target(ins.operands) not in loop or self._falls_out(ins, loop))]
+        if len(exits) != 2:
+            return None
+        shape = self.array_search_shape(header)
+        if shape is None:
+            return None
+        lb = self._loop_bound(header, shape.index_reg)
+        if lb is None:
+            return None
+        bound = next((b for b in exits if b.addr == lb[1]), None)
+        match = next((b for b in exits if b.addr != lb[1]), None)
+        if bound is None or match is None:
+            return None
+
+        setup, body = self.loop_timing(header)
+        found = self._partial_to(loop_insns, match, loop)
+        notfound = self._partial_to(loop_insns, bound, loop)
+        shutdown = self._shutdown_terms(header)
+        return SearchTiming(setup=setup, body=body, found_partial=found,
+                            notfound_partial=notfound, shutdown=shutdown)
+
+    def _falls_out(self, branch: "Insn", loop: set[int]) -> bool:
+        """True if the branch's FALLTHROUGH successor leaves the loop (so it exits when not taken)."""
+        blk = next((b for b in self.blocks.values() if any(i.addr == branch.addr for i in b.insns)),
+                   None)
+        if blk is None:
+            return False
+        taken = _branch_target(branch.operands)
+        return any(s is not None and s != taken and s not in loop for s in blk.succ)
+
+    def _partial_to(self, loop_insns: list, exit_branch: "Insn", loop: set[int]) -> str:
+        """Cost of the iteration prefix from the header up to `exit_branch`, with in-loop branches
+        costed at their stay-in-loop edge and `exit_branch` costed at the edge that LEAVES the loop."""
+        terms: list[str] = []
+        for ins in loop_insns:
+            if ins.addr > exit_branch.addr:
+                break
+            if ins.addr == exit_branch.addr:
+                exit_taken = _branch_target(ins.operands) not in loop   # exits by taking it?
+                term = _insn_tconst(ins, exit_taken)
+                if term:
+                    terms.append(term)
+                break
+            taken = (_branch_target(ins.operands) in loop) if ins.mnemonic in _BRANCH_OPS else None
+            term = _insn_tconst(ins, taken)
+            if term:
+                terms.append(term)
+        return " + ".join(terms)
+
+    def _shutdown_terms(self, header: int) -> str:
+        """Post-loop straight-line cost: from the loop's (single) exit target up to and including the
+        return — the `shutdown` term of the closed form."""
+        dsts = {d for _, d in self.loop_exit_edges(header)}
+        if len(dsts) != 1:
+            return ""
+        tgt = next(iter(dsts))
+        terms: list[str] = []
+        for ins in sorted((i for b in self.blocks.values() for i in b.insns if i.addr >= tgt),
+                          key=lambda i: i.addr):
+            term = _insn_tconst(ins, False if ins.mnemonic in _BRANCH_OPS else None)
+            if term:
+                terms.append(term)
+            if ins.mnemonic in ("jalr", "ret"):
+                break
+        return " + ".join(terms)
 
     def loop_timing(self, header: int) -> tuple[str, str] | None:
         """Derive (prefix, body) Coq timing expressions for the loop at `header`, summed from the

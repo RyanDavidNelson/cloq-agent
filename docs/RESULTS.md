@@ -228,10 +228,17 @@ flags; `eval/heldout/measure.py`). Findings:
   shape_premises`) discharge for both held-out shapes (`tests/test_shape_recovery.py`), so a wrong
   stride would be caught at generation time. Held to two shapes (indexed word search, running-pointer
   word walk); byte stride is GAP 2's.
-- **GAP 2 (confirmed): no disjunctive timing.** `cfg.loop_timing` returns a single `(prefix, body)`,
-  but `time_of_find_in_array` is a found/not-found **disjunction** (the partial-iteration cost differs
-  on the two exit edges: `ttbgeu` vs `tfbgeu + … + ttbeq`). A held-out function can't reuse `time_of_*`;
-  the CFG must emit the two-arm form. This is upstream of any closer — a wrong `time_of` closes nothing.
+- **GAP 2 — derivation done + oracle-validated; held-out blocked on loop rotation.** `cfg.
+  search_loop_timing` emits the found/not-found **disjunction** `setup + (Some i=>i | None=>trip)*body
+  + (Some=>found_partial | None=>notfound_partial) + shutdown`, attributing each partial to its exit
+  edge: the structural BOUND branch (GAP 1) is the not-found exit, the data-dependent MATCH branch the
+  found exit, each costed at the direction (taken/fallthrough) that LEAVES the loop. It reproduces the
+  vendored `time_of_find_in_array` **term-for-term** (`tests/test_disjunctive_timing.py`) — the
+  mechanism is validated. A pure walk (ap_ptr_walk, one exit) correctly yields no disjunction.
+  **Open:** the held-out se_find_eq applies the derivation but gcc -O2 emits a ROTATED loop (a `j`
+  into the body past the first increment); `_natural_loop` over-includes the preheader through that
+  entry edge and corrupts the body. Loop-rotation normalization is upstream of GAP 2 (it also affects
+  `loop_timing`) and is the next thing before held-out timing — flagged for review before the closer.
 - **GAP 3: the generic branch closer** (still the renamed gold leaves).
 
 Corrected order to "Phase 2 done to held-out": ~~(1) running-pointer shape recovery~~ DONE -> **(2)

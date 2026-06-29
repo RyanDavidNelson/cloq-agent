@@ -63,6 +63,21 @@ class ArrayShape:
         return {1: "Ⓑ", 2: "Ⓦ", 4: "Ⓓ", 8: "Ⓠ"}.get(self.elem_bytes, "Ⓓ")
 
 
+def time_of_definition(name: str, trip: str, t) -> str:
+    """Render a `SearchTiming` (from `cfg.search_loop_timing`) as the Coq disjunctive closed form.
+    `trip` is the not-found iteration count (`len`, or the pointer-range `(end-base)/stride`); the
+    found arm counts `i`, the load index. Emits the same shape as the vendored `time_of_<fn>`."""
+    return (
+        f"  Definition {name} ({trip} : N) (found_idx : option N) (t : trace) :=\n"
+        f"      cycle_count_of_trace t =\n"
+        f"          {t.setup} +\n"
+        f"          (match found_idx with None => {trip} | Some i => i end) * ({t.body}) +\n"
+        f"          (match found_idx with None => {t.notfound_partial} "
+        f"| Some _ => {t.found_partial} end) +\n"
+        f"          {t.shutdown}."
+    )
+
+
 def shape_premises(shape: ArrayShape, base: str = "base", trip: str = "n",
                    endp: str = "endp") -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """The input well-formedness premises IMPLIED by a recovered shape, parameterized by the
