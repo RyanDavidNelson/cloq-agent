@@ -1,0 +1,35 @@
+# Held-out transfer suite: 20 functions (10 OpenSSL, 10 FreeRTOS), 5 easy / 3 medium / 2 hard each.
+# `func` is the symbol to prove; `src` is the reduced self-contained unit under <suite>/src/.
+# status: ready = reduced + run; pending = drags in too much machinery (recorded as a lift gap).
+# Held-out discipline is enforced by the harness: the target's gold invariant/proof is never put in
+# load_proof_library or the few-shot, so a pass is generalization, not recall.
+
+openssl:
+  # easy: branchless constant-time helpers (include/internal/constant_time.h) -> expect pass
+  - { name: value_barrier,        tier: easy,   func: value_barrier,         property: ct,   src: ct_value_barrier.c, status: ready }
+  - { name: constant_time_msb,    tier: easy,   func: constant_time_msb,     property: ct,   src: ct_msb.c,           status: ready }
+  - { name: constant_time_is_zero,tier: easy,   func: constant_time_is_zero, property: ct,   src: ct_is_zero.c,       status: ready }
+  - { name: constant_time_eq,     tier: easy,   func: constant_time_eq,      property: ct,   src: ct_eq.c,            status: ready }
+  - { name: constant_time_select, tier: easy,   func: constant_time_select,  property: ct,   src: ct_select.c,        status: ready }
+  # medium: single loop -> mostly ceiling
+  - { name: CRYPTO_memcmp,        tier: medium, func: CRYPTO_memcmp,         property: ct,   src: crypto_memcmp.c,    status: ready }
+  - { name: OPENSSL_cleanse,      tier: medium, func: OPENSSL_cleanse,       property: wcet, src: openssl_cleanse.c,  status: ready, note: "explicit-loop form; 3.4.0 delegates to memset_func" }
+  - { name: ChaCha20_block,       tier: medium, func: chacha20_block,        property: wcet, src: null,               status: pending, note: "extensive state/rotation macros; reduction pending" }
+  # hard: array / multi-loop -> expect fail at a named class
+  - { name: BN_consttime_swap,    tier: hard,   func: BN_consttime_swap,     property: ct,   src: bn_consttime_swap.c, status: ready }
+  - { name: Poly1305_block,       tier: hard,   func: poly1305_blocks,       property: wcet, src: null,               status: pending, note: "bignum-limb arithmetic + state struct; reduction pending" }
+
+freertos:
+  # easy: straight-line -> expect pass
+  - { name: vListInitialise,      tier: easy,   func: vListInitialise,       property: wcet, src: vListInitialise.c,      status: ready }
+  - { name: vListInitialiseItem,  tier: easy,   func: vListInitialiseItem,   property: wcet, src: vListInitialiseItem.c,  status: ready }
+  - { name: vListInsertEnd,       tier: easy,   func: vListInsertEnd,        property: wcet, src: vListInsertEnd.c,       status: ready }
+  - { name: xTaskGetCurrentTaskHandle, tier: easy, func: xTaskGetCurrentTaskHandle, property: wcet, src: xTaskGetCurrentTaskHandle.c, status: ready }
+  - { name: prvResetNextTaskUnblockTime, tier: easy, func: prvResetNextTaskUnblockTime, property: wcet, src: null, status: pending, note: "needs TCB_t + delayed-list globals; reduction pending" }
+  # medium: one loop / aliasing -> mixed, mostly ceiling
+  - { name: uxListRemove,         tier: medium, func: uxListRemove,          property: wcet, src: uxListRemove.c,         status: ready }
+  - { name: xTaskResumeAll,       tier: medium, func: xTaskResumeAll,        property: wcet, src: null,                   status: pending, note: "scheduler + pending-ready loop over TCB lists; reduction pending" }
+  - { name: uxQueueMessagesWaiting, tier: medium, func: uxQueueMessagesWaiting, property: wcet, src: null,               status: pending, note: "needs Queue_t struct; reduction pending" }
+  # hard: search / multi-branch -> expect fail at a named class
+  - { name: vListInsert,          tier: hard,   func: vListInsert,           property: wcet, src: vListInsert.c,          status: ready }
+  - { name: xTaskIncrementTick,   tier: hard,   func: xTaskIncrementTick,    property: wcet, src: null,                   status: pending, note: "multi-branch + delayed-list loop over TCBs; reduction pending" }

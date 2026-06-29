@@ -33,7 +33,25 @@ proof; `llm_calls=0`) proves the template renders and the program is provable; a
 
 Caveat on the numbers: the `_llm` targets are *twins of golds we hold*, and addloop_llm closes by
 reusing addloop's own gold proof — so these are **in-distribution dev metrics (recall-leaning)**,
-not a generalization claim. There is no held-out generalization number yet (see below).
+not a generalization claim.
+
+### Held-out generalization (the number that was missing)
+
+`docs/results/transfer.md` reports the first **held-out** number, on 20 functions reduced from
+pinned OpenSSL 3.4.0 + FreeRTOS-Kernel V11.1.0 (`eval/transfer/`, run via
+`python eval/transfer/run_transfer.py`). Each target's gold invariant/proof is withheld from the
+proof library and the few-shot, so a pass is generalization, not recall; straight-line targets are
+machine-checked to **Qed** with a CFG-derived deterministic proof.
+
+- **Easy tier: 8/10 proved** held-out (branchless straight-line — incl. real OpenSSL `constant_time_*`
+  and FreeRTOS `vListInitialise`/`vListInsertEnd`/`xTaskGetCurrentTaskHandle`). The non-passes are a
+  degenerate identity body (`value_barrier` optimizes to a bare `ret`) and one *reduction-pending*.
+- **Medium/hard: 0/10** — by design they hit the documented wall: array/pointer loops
+  (`CRYPTO_memcmp`, `OPENSSL_cleanse`, `BN_consttime_swap`), an unsupported cyclic-list search
+  (`vListInsert`), and a memory-aliasing branch (`uxListRemove`). 6 are *reduction-pending* (drag in
+  full FreeRTOSConfig / a configured OpenSSL tree) and recorded as lift gaps.
+
+That distribution — easy mostly pass, medium/hard at a named ceiling class — is the transfer finding.
 
 ## Capability matrix
 
