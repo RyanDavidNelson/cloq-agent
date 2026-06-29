@@ -303,8 +303,16 @@ class Orchestrator:
             # Root only: the deterministic structural prelude (apply prove_invs … destruct_inv) and
             # the reusable proof-skill library. These play multi-tactic scripts that advance the raw
             # `satisfies_all` goal to the post-`destruct_inv` fan-out — not LLM territory.
+            #
+            # `loop_proof()` (the order-agnostic, witness-explicit `solve_timing_loop` over a uniform
+            # `all:` dispatch) is tried BEFORE the proof library: it closes a synthesized loop
+            # invariant regardless of conjunct order/arm count, where the literal positional gold
+            # scripts (`destruct PRE as (a & b & …)`) desync on a reordered or CFG-cut invariant.
             if node.depth == 0:
-                for script in [*STRUCTURED_SCRIPTS, *(proof_library or [])]:
+                from ..lift.intake import loop_proof
+                root_scripts = [*STRUCTURED_SCRIPTS, loop_proof(getattr(spec, "addr_width", 32)),
+                                *(proof_library or [])]
+                for script in root_scripts:
                     if cd.over:
                         break
                     out = run_script(cd, cur.state, list(script))

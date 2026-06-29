@@ -141,6 +141,36 @@ now **fail fast** with the structured diagnostic for a ceiling-classified target
 anyway requires `--force-synthesis`, which runs under a clamped budget
 (`agent.ceiling_invariant_attempts` / `ceiling_search_max_runs`).
 
+## Phase 1 — discharge robustness (array/pointer, ct_swap)
+
+Phase 0 showed the gold *scripts* close, but they are positional (`destruct PRE as (a & b & …)`)
+and so desync on a *synthesized* invariant whose conjuncts are reordered or whose arm count shifts.
+Three discharge bugs, three fixes, all in the one generic `solve_timing_loop` tactic
+(`lift/intake.py`), now tried BEFORE the positional gold library at the search root
+(`agent/orchestrator.py`):
+
+1. **Brittle positional destructuring** -> shape-based `destruct` (`match goal with H : _ /\ _ =>
+   destruct H | H : exists _,_ => destruct H`), order/count agnostic.
+2. **Deferred `eexists` never unifies** (the witness must precede the splits that constrain the
+   cycle count) -> explicit witness: `handle_ex; exists (1 + i)` for the step, `exists 0` for the
+   base, where `i` is found by its `i <= len` bound, not by position.
+3. **CFG cuts change the subgoal count** -> one uniform `all: solve_timing_loop` over every
+   `destruct_inv` arm, plus the trichotomy fact inlined (`assert (i = n \/ i < n) by lia`).
+
+Result (live pet-server, no LLM): one unified tactic closes **both** addloop (counter loop) and
+**ct_swap (array/pointer)** to Qed given the gold invariant — the first past-ceiling discharge.
+`tests/test_discharge_robustness.py` pins both; `tests/test_replay_harness.py` still green.
+
+**Non-vacuity (mutation, proof-only — FPGA parked).** `eval/mutate.py` now degrades to proof-only
+(`caught` = the proof broke; FPGA variance optional) and gains `cycle_form_mutations`, which
+corrupts the invariant's `cycle_count_of_trace t' = …` closed form (double/drop a per-instruction
+term). `tests/test_mutate.py::test_ct_swap_close_is_non_vacuous`: the gold cycle form closes and
+**every** corruption fails to discharge — so the array/pointer close is constrained by the real
+timing, not vacuously true.
+
+The remaining ct_swap gap is **synthesis** producing that `exists`-index invariant; discharge no
+longer blocks it.
+
 ## Next (see CLAUDE.md "Next tasks")
 
 The honest path to data-structure loops is an **LLM proof-search agent** — a multi-step,

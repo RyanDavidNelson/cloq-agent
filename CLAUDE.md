@@ -28,25 +28,32 @@ place. Do **not** redo any of this:
   **skeleton synthesis** (model fills only the holes); **`try_structured` discharge** + a
   **gold-proof library** (`load_proof_library`); **verifier-guided refinement**; `spec_lint`
   anti-vacuity; the **synthesis/discharge ablation** (`prove <t> --ablate-gold-proof <gold>`).
-- Proof-**search** agent scaffolding exists (`AGENT.md`): backtracking, `agent.tactic_timeout_s`,
-  `search_max_depth`, `search_max_runs`, `driver.replay_from_root`. It has **not yet** moved the
-  data-structure-loop numbers.
+- Proof-**search** agent (`AGENT.md`) exists and works: DFS **backtracking** over petanque states,
+  `agent.tactic_timeout_s`, `search_max_depth`, `search_max_runs`, `driver.replay_from_root`.
+- **Phase 0** (`eval/replay.py`, `cloq-agent replay`): per-arm gold-proof replay oracle — states a
+  theorem with the GOLD invariant (no LLM) and replays each arm vs the generated scaffold, so
+  discharge is testable in isolation from synthesis. Plus a ceiling **fail-fast gate** in
+  `pipeline.py` (`--force-synthesis` + clamped budget).
+- **Phase 1** (discharge robustness): `solve_timing_loop` is now order-agnostic (shape-based
+  `destruct`), witness-explicit (`handle_ex; exists (1+i)` / `exists 0`, the index found by its
+  `i <= len` bound — not deferred `eexists`), over one uniform `all:` dispatch, and is tried BEFORE
+  the positional gold scripts. One unified tactic closes **both** the counter loop (addloop) and
+  the **array/pointer loop (ct_swap)** with no LLM, given a correct invariant — validated
+  non-vacuous by cycle-form mutation (`eval/mutate.py`, proof-only).
 
 **Measured (in-distribution / recall-leaning, NOT held-out):**
 `cloq-agent eval list_easy_four` -> 3/4 synth (uxListRemove fails) - `eval loop_easy` -> 1/3 synth
-(only addloop passes) - `pytest tests/` -> 27 passed.
+(only addloop passes) - `pytest tests/` -> 118 passed / 5 skipped (in the agent container).
 
-**The ceiling (the important part).** Works: **straight-line** WCET/CT and the **pure counter
-loop**. Does **not** work yet:
-- array/pointer loop (e.g. `ct_swap`) — needs an `exists`-index invariant + witness;
+**The ceiling (the important part).** Discharge now closes **straight-line**, **pure counter loop**,
+and **array/pointer loop** (ct_swap) GIVEN a correct invariant. Remaining gaps:
+- array/pointer **end-to-end**: discharge is solved; the open part is **synthesis** emitting the
+  `exists`-index invariant (the model's job, or a future deterministic array deriver);
 - search loop w/ data-dependent early exit (`find_in_array`, `find_in_list`) — needs a
-  program-specific decidability case-split (`key_in_..._dec`);
+  program-specific decidability case-split (`key_in_..._dec`); **Phase 2** (templated from the
+  recovered array shape for `find_in_array`/`find_in_array_opt`; `find_in_list`/cyclic
+  `vListInsert` stay open);
 - memory-aliasing branch (`uxListRemove`) — needs `noverlaps`/`getmem_noverlap` reasoning.
-
-These are bespoke interactive theorem proving, not invariant synthesis; closing them is the
-**proof-search-agent research track**, separate from the application work below. Expect any
-non-trivial uploaded C with a data-structure loop to land in the **failure diagnostic** path —
-so that path is the common case, not an edge case.
 
 ## Deferred (out of scope for now)
 

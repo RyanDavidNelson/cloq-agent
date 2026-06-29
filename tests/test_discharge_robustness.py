@@ -1,0 +1,72 @@
+"""Discharge robustness (Phase 1): the order-agnostic, witness-explicit `solve_timing_loop` closes
+a loop invariant via one uniform `all:` dispatch — WITHOUT the positional gold script and WITHOUT
+the LLM. Run against a REAL pet-server (skipped when none is reachable).
+
+This is the fix for the three discharge bugs: (1) brittle positional `destruct PRE as (a & b & …)`
+-> shape-based destruct; (2) deferred `eexists` that never unifies -> explicit `exists (1+i)` /
+`exists 0` found by shape; (3) per-arm ordered script that slips on a CFG cut -> uniform
+`all: solve_timing_loop`. We prove it on the GOLD invariant (ground truth, via the replay scaffold)
+so a failure is unambiguously a discharge regression, not synthesis.
+"""
+from __future__ import annotations
+
+import socket
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from cloq_agent.config import load_config
+from cloq_agent.lift.intake import loop_proof
+from cloq_agent.proof.hammer import run_script
+from cloq_agent.proof.petanque_driver import PetanqueDriver
+from cloq_agent.proof.theorem_builder import render, write
+
+from eval.replay import _inv_name
+from eval.targets import build_spec, load_targets
+
+_REPO = Path(__file__).resolve().parents[1]
+_CFG = load_config()
+_TARGETS = str(_REPO / "eval" / "targets.yaml")
+
+
+def _pet_server_up() -> bool:
+    try:
+        with socket.create_connection((_CFG.petanque.host, _CFG.petanque.port), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _pet_server_up(),
+    reason=f"no pet-server at {_CFG.petanque.host}:{_CFG.petanque.port}",
+)
+
+
+def _close_via_generic_discharge(target: str) -> bool:
+    """State `target` with its GOLD invariant, then drive the generic `loop_proof()` discharge
+    (solve_timing_loop + uniform prelude) — not the target's literal gold proof script."""
+    t = load_targets(_TARGETS)[target]
+    spec, _d, _s, gold_inv, _gp, _sk = build_spec(t, _REPO, name=target)
+    write(spec, render(spec, gold_inv, _inv_name(gold_inv)), Path(_CFG.petanque.workspace))
+    with PetanqueDriver(_CFG.petanque, default_timeout_s=_CFG.agent.tactic_timeout_s) as d:
+        start = d.start(
+            f"{_CFG.petanque.workspace}/targets/{spec.name.capitalize()}_gen.v", spec.theorem_name)
+        assert start.ok, f"start failed: {start.error}"
+        out = run_script(d, start.state, loop_proof(spec.addr_width))
+    return out.closed
+
+
+def test_array_pointer_loop_closes_via_generic_discharge():
+    """ct_swap (array/pointer, exists-index witness) closes through the uniform tactic — the
+    past-ceiling win the explicit witness unlocks."""
+    assert _close_via_generic_discharge("ct_swap")
+
+
+def test_counter_loop_still_closes_via_generic_discharge():
+    """Regression: addloop (pure counter loop) still closes through the SAME unified tactic, so the
+    array fix did not cost the counter-loop modular-arithmetic close."""
+    assert _close_via_generic_discharge("addloop")

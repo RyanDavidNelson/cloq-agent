@@ -292,21 +292,39 @@ def straightline_proof(addr_width: int = 32) -> list[str]:
     return [ln.format(width=addr_width) for ln in PRELUDE_LINES] + [STRAIGHTLINE_CLOSER]
 
 
-# The reusable loop-discharge tactic (fix #2). Per `destruct_inv` obligation it: destructs the
-# invariant's `/\` chain + `exists i`; steps the block (`tstep r5_step`); instantiates the next
-# witness (`eexists`); applies the modular-arithmetic rewrites the timing goals need
-# (`msub_nowrap` for `a ⊖ b`, `N_sub_distr` for `(a-b)*c`); then closes with split/assumption/
-# psimpl/lia/hammer. Verified to close the counter-loop class (addloop) given a correct invariant.
+# The reusable, INVARIANT-ORDER-AGNOSTIC loop-discharge tactic, one uniform `all:` rung over every
+# `destruct_inv` obligation. Per obligation it:
+#   1. destructs the invariant's `/\` chain + `exists` by SHAPE (not a positional `destruct PRE as
+#      (a & b & …)`), so a synthesized invariant whose conjuncts are in a different order still
+#      unpacks (fix #1 — brittle positional destructuring);
+#   2. steps the block (`tstep r5_step`) and clears the trivial `exists k'` alignment goals
+#      (`handle_ex`);
+#   3. supplies the loop index witness EXPLICITLY — `exists (1 + i)` for the inductive step (the
+#      index `i` is the in-context var carrying an `i <= len` bound) and `exists 0` for the base
+#      arm — instead of a deferred `eexists`, which never unifies once the splits constrain it
+#      (fix #2 — array/pointer loops, e.g. ct_swap);
+#   4. applies the modular-arithmetic rewrites the counter-loop timing goals need (`msub_nowrap`
+#      for `a ⊖ b`, `N_sub_distr` for `(a-b)*c`), a trichotomy step for the `1 + i <= len`
+#      obligation (fix #5 — done inline so no external lemma is required), and the exit-arm
+#      `replace i with len` before the final `lia`/`hammer`.
+# Verified (live pet-server) to close BOTH the counter-loop class (addloop) and the array/pointer
+# class (ct_swap) from this single tactic, given a correct invariant.
 SOLVE_TIMING_LOOP = (
     "Local Ltac solve_timing_loop := "
     "repeat (match goal with "
     "| [ H : _ /\\ _ |- _ ] => destruct H "
     "| [ H : exists _, _ |- _ ] => destruct H end); "
-    "repeat (tstep r5_step); "
-    "repeat (match goal with |- exists _, _ => eexists end); "
+    "repeat (tstep r5_step); handle_ex; "
+    "first [ match goal with [ H : ?i <= _ |- exists _, _ ] => exists (1 + i) end "
+    "| try (exists 0) ]; "
     "try (rewrite msub_nowrap by (psimpl; lia)); try (rewrite N_sub_distr by lia); "
-    "repeat split; try assumption; try (psimpl; lia); try lia; try hammer; "
-    "try (rewrite N_sub_distr; lia)."
+    "repeat split; try assumption; "
+    "try (match goal with [ H : ?i <= ?n |- 1 + ?i <= ?n ] => "
+    "assert (i = n \\/ i < n) by lia; lia end); "
+    "try (psimpl; lia); try lia; try hammer; "
+    "try (rewrite N_sub_distr; lia); "
+    "try (match goal with [ H : ?i <= ?n |- _ ] => replace i with n by lia end; lia); "
+    "try hammer."
 )
 
 # The loop discharge script: define the tactic, run the base case (entry arm: register facts +
@@ -326,10 +344,11 @@ _LOOP_PRELUDE = (
 
 
 def loop_proof(addr_width: int = 32) -> list[str]:
-    """Deterministic discharge for a counter-loop-class proof: the `solve_timing_loop` tactic, then
-    the loop prelude applying it to every `destruct_inv` obligation. Verified to close `addloop`
-    (the pure counter loop) with no LLM, given a correct invariant — the bottom rung of the loop
-    curriculum. Array/stride loops add witness + memory reasoning the tactic does not yet cover."""
+    """Deterministic discharge for a loop-class proof: the `solve_timing_loop` tactic, then the loop
+    prelude applying it to every `destruct_inv` obligation. Verified (no LLM, given a correct
+    invariant) to close both `addloop` (pure counter loop) and `ct_swap` (array/pointer loop, via
+    the explicit index witness). Search loops with a data-dependent early exit still need a
+    program-specific decidability case-split (Phase 2)."""
     return [SOLVE_TIMING_LOOP] + [ln.format(width=addr_width) for ln in _LOOP_PRELUDE]
 
 
