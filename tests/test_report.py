@@ -35,6 +35,23 @@ def test_render_is_ascii_only_no_emoji():
     assert out.isascii(), "prove-c output must be emoji/glyph-free"
 
 
+def test_proved_report_states_trust_basis_timing_model_unvalidated():
+    rep = ProveCReport(target="f.c", func="f", proved=True)
+    rep.stage("invariant", Status.OK).stage("stored", Status.OK)
+    out = rep.render()
+    assert "trust basis" in out
+    assert "NEORV32 timing model" in out and "unvalidated" in out  # FPGA-parked honesty
+
+
+def test_constant_time_report_says_formal_only():
+    rep = ProveCReport(target="ct.c", func="ct", prop="ct", proved=True)
+    rep.stage("invariant", Status.OK).stage("stored", Status.OK)
+    out = rep.render()
+    assert "FORMAL-ONLY" in out and "dudect" in out         # no empirical CT confirmation
+    # WCET reports do not claim the CT caveat
+    assert "FORMAL-ONLY" not in ProveCReport(target="w.c", func="w", proved=True).trust_basis()
+
+
 def test_expected_failure_is_labelled_with_diagnosis():
     rep = ProveCReport(target="asum.c", func="asum")
     rep.ceiling_class = "array/pointer loop"

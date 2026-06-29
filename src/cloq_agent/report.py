@@ -183,6 +183,18 @@ class ProveCReport:
         Status.LIMITATION: "[xfail ]",   # expected failure for a known ceiling class
     }
 
+    def trust_basis(self) -> str:
+        """What the proof is sound RELATIVE TO — stated plainly because, with FPGA parked, the
+        timing model is a fully trusted (hardware-unvalidated) input. The premise gate + mutation
+        rule out vacuity, but they do not validate the per-instruction cycle constants."""
+        note = ("sound relative to the NEORV32 timing model (an unvalidated input -- no hardware "
+                "cross-check; FPGA parked) and the pinned compiler/flags; premises checked jointly "
+                "satisfiable, postcondition non-vacuous (mutation)")
+        if self.prop == "ct":
+            note += ("; constant-time is FORMAL-ONLY (the secret provably never enters the cycle "
+                     "closed form, spec_lint-enforced) -- no empirical (dudect) confirmation")
+        return note
+
     def render(self) -> str:
         """A compact human-readable diagnostic (the CLI prints this)."""
         lines = [f"prove-c {self.func}: {self.headline}"]
@@ -194,6 +206,7 @@ class ProveCReport:
             if self.predicted_range:
                 lines.append(f"  predicted range: {self.predicted_range}")
             lines.append(f"  added to corpus: {'yes' if self.added_to_corpus else 'no'}")
+            lines.append(f"  trust basis: {self.trust_basis()}")
         if self.toolchain_version:
             lines.append(f"  toolchain: {self.toolchain_version.splitlines()[0]}")
         if self.flags:
@@ -227,6 +240,7 @@ class ProveCReport:
             md.append(f"- **cycle-count closed form**: `{self.predicted_cycles or 'n/a'}`")
             md.append(f"- **predicted range**: {self.predicted_range or 'n/a'}")
             md.append(f"- **added to corpus**: {'yes' if self.added_to_corpus else 'no'}")
+            md.append(f"- **trust basis**: {self.trust_basis()}")
         md += ["", "## Stages", "", "| stage | status | detail |", "|---|---|---|"]
         for s in self.stages:
             md.append(f"| {s.name} | {s.status.value} | {s.detail or ''} |")

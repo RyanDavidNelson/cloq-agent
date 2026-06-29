@@ -22,6 +22,7 @@ from ..models import LLM
 from ..rag.retriever import Retriever
 from ..proof.petanque_driver import PetanqueDriver
 from ..proof.hammer import try_ladder, run_script, STRUCTURED_SCRIPTS
+from ..proof.premise_check import check_premises_satisfiable
 from ..proof.theorem_builder import TargetSpec, render, write
 from . import invariant_synth, tactic_repair
 
@@ -125,6 +126,17 @@ class Orchestrator:
         t0 = time.time()
         llm_calls = 0
         escalated = False
+
+        # Anti-vacuity integrity gate (replaces FPGA's implicit "an impossible state can't be
+        # measured" cross-check): refuse a theorem whose input well-formedness premises are jointly
+        # UNSATISFIABLE — it would be vacuously true, proving the bound only by assuming something
+        # impossible. Checked once up front, independent of the invariant. spec_lint guards the
+        # postcondition; this guards the premises. "spec rejected" routes it to the spec-lint stage.
+        sat, why = check_premises_satisfiable(driver, spec, self.workspace)
+        if not sat:
+            return ProofResult(spec.name, False, 0, 0, llm_calls, escalated, None,
+                               time.time() - t0, error=f"spec rejected: {why}")
+
         # Carries the previous attempt's failure (Rocq/lint error) into the next synthesis call so
         # the model can correct a concrete mistake instead of re-guessing blind.
         last_error: str | None = None

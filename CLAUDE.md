@@ -69,8 +69,16 @@ and **array/pointer loop** (ct_swap) GIVEN a correct invariant. Remaining gaps:
 - **FPGA validation.** Parked at the user's request. `fpga/` stays in the repo but is **off the
   critical path** — no board dependency in CI, the GUI, the report, or the transfer metric.
   Output is the proven **closed-form cycle count + predicted range** only; there is no
-  measured-vs-predicted right now. (`eval/mutate.py` degrades to proof-only: inject a leak ->
-  the proof must break / `spec_lint` must reject.)
+  measured-vs-predicted right now.
+- **What replaces FPGA's implicit checks (no-FPGA integrity).** Two anti-vacuity gates stand in for
+  the two things hardware used to cross-check: (1) `eval/mutate.py` (proof-only) — corrupt the cycle
+  closed form, the proof MUST break (postcondition non-vacuity); (2) `proof/premise_check.py` — the
+  **premise-satisfiability gate**, run on every `prove()`: emit `exists <binders>, <input premises>`
+  and require Rocq to discharge it, so a contradictory premise (PTR_ALIGN/LEN_VALID/noverlaps) is
+  rejected at generation time instead of yielding a vacuously-true theorem. The report states the
+  **trust basis** plainly: proofs are sound *relative to* the NEORV32 timing model (now a fully
+  trusted, hardware-unvalidated input) and the pinned flags; constant-time is **formal-only** (the
+  secret provably never enters the closed form, `spec_lint`-enforced) — no empirical dudect check.
 
 ## Golden rules
 
