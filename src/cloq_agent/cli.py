@@ -107,13 +107,33 @@ def cmd_doctor(args) -> int:
     return 0
 
 
+def cmd_replay(args) -> int:
+    """Replay a target's gold proof arm-by-arm against the generated scaffold (no LLM): a
+    ground-truth discharge oracle. Prints which arm closes which goal; exits 0 iff it reaches Qed."""
+    from eval.replay import replay_gold_arms, targets_with_gold_proof
+
+    cfg = load_config(args.config)
+    from .proof.petanque_driver import driver as pet_driver
+
+    names = [args.target] if args.target else targets_with_gold_proof(cfg.eval.targets_file)
+    rc = 0
+    with pet_driver(cfg.petanque, default_timeout_s=cfg.agent.tactic_timeout_s) as d:
+        for name in names:
+            rep = replay_gold_arms(d, name, targets_file=cfg.eval.targets_file,
+                                   repo_root=_repo_root())
+            console.print(rep.render())
+            rc = rc or (0 if rep.closed else 1)
+    return rc
+
+
 def cmd_prove_c(args) -> int:
     """compile -> lift -> classify -> (prove | structured diagnostic) for an uploaded C unit."""
     from .pipeline import run_prove_c
 
     cfg = load_config(args.config)
     rep = run_prove_c(c_path=args.file, func=args.function, cfg=cfg, repo_root=_repo_root(),
-                      prop=args.property, secret=args.secret)
+                      prop=args.property, secret=args.secret,
+                      force_synthesis=args.force_synthesis)
 
     print(rep.render())
     from .config import resolve_out_dir
@@ -179,7 +199,15 @@ def main(argv: list[str] | None = None) -> int:
                     help="WCET (default) or constant-time")
     pc.add_argument("--secret", default=None, metavar="PARAM",
                     help="secret parameter name (required reasoning anchor for --property ct)")
+    pc.add_argument("--force-synthesis", action="store_true",
+                    help="attempt a ceiling-classified target anyway (clamped budget); default is "
+                         "to fail fast with the structured diagnostic")
     pc.set_defaults(func=cmd_prove_c)
+
+    pr = sub.add_parser("replay", help="replay gold proof arms vs the scaffold (discharge oracle)")
+    pr.add_argument("target", nargs="?", default=None,
+                    help="target name (default: every registry target with a gold_proof)")
+    pr.set_defaults(func=cmd_replay)
 
     pe = sub.add_parser("eval", help="run the eval harness over a group/targets (default: all)")
     pe.add_argument("selectors", nargs="*", default=None,

@@ -68,6 +68,11 @@ class AgentCfg:
     # LLM-call cap (propose() calls) inside the search; these bound the shape of the search tree.
     search_max_depth: int = 40      # longest tactic path from the post-start root
     search_max_runs: int = 600      # total driver.run calls across the whole search
+    # Clamped budgets applied ONLY to a ceiling-classified target run under --force-synthesis: the
+    # CFG has no deterministic invariant, so synthesis is a long shot — fail fast with the
+    # diagnostic instead of burning the full invariant_attempts x search_max_runs budget churning.
+    ceiling_invariant_attempts: int = 1
+    ceiling_search_max_runs: int = 40
     # Ablation switch: when False, _discharge runs the deterministic layer only (ladder +
     # structured prelude + proof library) and skips all LLM tactic-repair. Lets us measure what
     # the LLM search layer actually adds over the deterministic scaffold. Default True (full search).

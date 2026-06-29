@@ -39,6 +39,7 @@ def run_prove_machine_code(
     mcu: str = "neorv32",
     prop: str = "wcet",
     secret: str | None = None,
+    force_synthesis: bool = False,
     on_stage: Callable[[StageRecord], None] | None = None,
 ) -> ProveCReport:
     """Disassemble an uploaded machine-code artifact (no compile step), then lift -> classify ->
@@ -57,7 +58,8 @@ def run_prove_machine_code(
         rep.error = compiled.error
         return rep
     rep.stage("disassemble", Status.OK, f"{mcu}: {len(_lines(compiled.objdump))} instructions")
-    return _prove_from_compiled(rep, compiled, cfg=cfg, repo_root=repo_root, prop=prop, secret=secret)
+    return _prove_from_compiled(rep, compiled, cfg=cfg, repo_root=repo_root, prop=prop,
+                                secret=secret, force_synthesis=force_synthesis)
 
 
 def run_prove_c(
@@ -68,6 +70,7 @@ def run_prove_c(
     repo_root: Path,
     prop: str = "wcet",
     secret: str | None = None,
+    force_synthesis: bool = False,
     on_stage: Callable[[StageRecord], None] | None = None,
 ) -> ProveCReport:
     """Compile a C unit, then lift -> classify -> prove (the CLI `prove-c` intake)."""
@@ -85,7 +88,8 @@ def run_prove_c(
         rep.error = compiled.stderr.strip() or compiled.error
         return rep
     rep.stage("compile", Status.OK, f"-> {compiled.obj_path.name}")
-    return _prove_from_compiled(rep, compiled, cfg=cfg, repo_root=repo_root, prop=prop, secret=secret)
+    return _prove_from_compiled(rep, compiled, cfg=cfg, repo_root=repo_root, prop=prop,
+                                secret=secret, force_synthesis=force_synthesis)
 
 
 def _lines(listing: str | None) -> list[str]:
@@ -102,11 +106,17 @@ def _prove_from_compiled(
     repo_root: Path,
     prop: str,
     secret: str | None,
+    force_synthesis: bool = False,
 ) -> ProveCReport:
     """Shared body for both intakes: lift -> classify -> scaffold -> prove, mapping the orchestrator
     outcome onto the report stages. `compiled` is a CompileResult (from a C compile or a disassemble).
-    Every ceiling class is attempted (not short-circuited); a known limitation is labelled as an
-    expected failure with the residual goal, rather than presented as a crash."""
+
+    Targets with a deterministic CFG-derived invariant (straight-line / counter loop) always prove.
+    A ceiling-classified target (no deterministic invariant) is NOT attempted by default — it
+    short-circuits to the structured diagnostic so the engine stops churning on a known limitation.
+    `force_synthesis=True` opts into attempting it anyway, under a *clamped* budget
+    (`agent.ceiling_invariant_attempts` / `ceiling_search_max_runs`) so even the forced attempt
+    fails fast with the residual goal rather than burning the full search budget."""
     # --- lift stage ---
     lr = intake.lift(compiled, repo_root, prop=prop)
     if not lr.ok:
@@ -118,18 +128,44 @@ def _prove_from_compiled(
     rep.lift_log = lr.cfg_description
     rep.ceiling_class = lr.ceiling.value
 
-    # --- classify stage (informational; we attempt every class) ---
+    # --- classify stage ---
     # In scope = a deterministic CFG-derived invariant exists (straight-line OR counter loop).
+    # A ceiling class has no such invariant; it is only attempted under --force-synthesis.
     expected_fail = lr.invariant is None
+    why = CEILING_HELP.get(lr.ceiling, "outside the engine's current reach")
     if expected_fail:
-        why = CEILING_HELP.get(lr.ceiling, "outside the engine's current reach")
+        tail = "attempting anyway (forced, clamped budget)" if force_synthesis \
+            else "not attempted (pass --force-synthesis to try)"
         rep.stage("classify", Status.LIMITATION,
-                  f"{lr.ceiling.value} (expected failure: {why}); attempting anyway")
+                  f"{lr.ceiling.value} (expected failure: {why}); {tail}")
     else:
         scope = "counter loop, derived invariant" if lr.ceiling.value == "counter-loop" else "in scope"
         rep.stage("classify", Status.OK, f"{lr.ceiling.value} ({scope})")
     rep.predicted_cycles = (lr.postcondition or "").replace("cycle_count_of_trace t' ", "") or None
     rep.predicted_range = neorv32_cycle_range(lr.postcondition)
+
+    # --- ceiling gate: fail fast with the diagnostic unless synthesis is explicitly forced ---
+    # This is the "stop churning" policy: a known ceiling class doesn't get to run the prover
+    # (and the model) through its full budget by default. The diagnostic (class, why, predicted
+    # range) is the deliverable for these targets, per CLAUDE.md's ceiling section.
+    if expected_fail and not force_synthesis:
+        rep.stage("invariant", Status.LIMITATION,
+                  f"skipped: {lr.ceiling.value} is a known ceiling class ({why}); "
+                  f"re-run with --force-synthesis to attempt it under a clamped budget")
+        rep.stage("repair", Status.SKIPPED, "not attempted (ceiling class)")
+        rep.stage("stored", Status.SKIPPED, "nothing to store (not proved)")
+        rep.error = (f"expected failure for {lr.ceiling.value} ({why}); "
+                     f"not attempted (no --force-synthesis)")
+        return rep
+
+    # Forced attempt on a ceiling class: clamp the synthesis/search budget so it fails fast.
+    if expected_fail and force_synthesis:
+        from dataclasses import replace
+        cfg = replace(cfg, agent=replace(
+            cfg.agent,
+            invariant_attempts=cfg.agent.ceiling_invariant_attempts,
+            search_max_runs=cfg.agent.ceiling_search_max_runs,
+        ))
 
     # --- write + compile the scaffolding so the theorem can be stated ---
     secret = secret if prop == "ct" else None

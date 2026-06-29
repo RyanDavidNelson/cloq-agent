@@ -120,6 +120,27 @@ data-structure loops**. The ablation pinned the wall precisely:
 Conclusion: further synthesis/discharge micro-optimization on this corpus is not load-bearing. The
 next real capability requires a different tool (below), not another prompt or tactic tweak.
 
+## Phase 0 — per-arm gold-proof replay (discharge oracle)
+
+A ground-truth oracle that removes synthesis from the loop: state the theorem with the **gold**
+invariant (from the registry, no LLM) and replay each `gold_proof` arm against the scaffold the
+engine generates today, reporting per-arm goal deltas and the first failing closer
+(`eval/replay.py`; `cloq-agent replay [target]`; `tests/test_replay_harness.py`).
+
+Measured (live pet-server): **all three** gold-proof targets close arm-by-arm against the current
+scaffold — addloop 12/12, **ct_swap 11/11** (array/pointer), **find_in_array 13/13** (search
+early-exit), each reaching Qed including the `exists`-witness and `key_in_array_dec` case-split
+arms. So for these two ceiling classes the **discharge layer is already sufficient given the right
+invariant**; the wall is invariant *synthesis* (producing the exists-index / decidability-shaped
+invariant the existing closers consume), not the closers. This is the substrate for developing the
+next rung: write the arms, `replay`, read off exactly which arm/goal breaks — decoupled from
+synthesis.
+
+To stop the engine churning a known ceiling class through the full budget, `prove-c`/`prove-mc`
+now **fail fast** with the structured diagnostic for a ceiling-classified target; attempting one
+anyway requires `--force-synthesis`, which runs under a clamped budget
+(`agent.ceiling_invariant_attempts` / `ceiling_search_max_runs`).
+
 ## Next (see CLAUDE.md "Next tasks")
 
 The honest path to data-structure loops is an **LLM proof-search agent** — a multi-step,
