@@ -335,6 +335,40 @@ class CFG:
         return ArrayShape(base_reg=base_reg, index_reg=index_reg or a_ops[2],
                           elem_bytes=elem_bytes, shift_form=False, bound_reg=bound_reg)
 
+    def _block_of(self, addr: int) -> int | None:
+        """Block start whose instructions contain `addr`."""
+        for s, b in self.blocks.items():
+            if any(i.addr == addr for i in b.insns):
+                return s
+        return None
+
+    def _loop_entry_block(self, header: int) -> int:
+        """The loop block ENTERED from outside the loop. For a top-test loop this is the header
+        (the preheader falls into it); for a gcc-rotated bottom-test loop it is the body block the
+        preheader `j`s into, past the header."""
+        loop = self._natural_loop(header)
+        for b in self.blocks.values():
+            if not b.insns or b.insns[0].addr in loop:
+                continue
+            for s in b.succ:
+                if s in loop:
+                    return s
+        return header
+
+    def loop_is_bottom_test(self, header: int) -> bool:
+        """True when the loop's bound check sits at the LATCH (after the body) rather than at the
+        top (like the vendored find_in_array). The discriminator: the block entered from outside the
+        loop is NOT the block holding the bound branch. gcc -O2 emits bottom-test (do-while + a
+        zero-length guard); the vendored corpus is top-test. The two need different `time_of`
+        decompositions — bottom-test fuses the bound test into the body and peels a len=0 guard."""
+        shape = self.array_search_shape(header)
+        if shape is None:
+            return False
+        lb = self._loop_bound(header, shape.index_reg)
+        if lb is None:
+            return False
+        return self._loop_entry_block(header) != self._block_of(lb[1])
+
     def _reg_init_before_loop(self, header: int, reg: str) -> tuple[str, int] | None:
         """The (source-reg, addr) of the latest `mv reg, src` / `addi reg, src, 0` before the loop —
         where a strength-reduced pointer gets its starting (base) value."""
