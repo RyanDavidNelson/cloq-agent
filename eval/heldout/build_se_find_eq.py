@@ -19,20 +19,38 @@ even though coqc compiles clean. THEN restart the pet-server so coq-lsp drops th
 
 Needs the riscv cross-toolchain on PATH (host) for compile_c and a running docker-rocq-1 for coqc.
 
-CLOSER SKELETON (drives to the three fanned goals; arms are the remaining ITP):
-    intros.
-    destruct (len =? 0) eqn:LEN0.
-    - apply N.eqb_eq in LEN0; subst len. apply prove_invs.   (* len=0 guard: base + inductive *)
-        <guard base case: step to the taken-guard exit; cycle = guard term>
-    - apply N.eqb_neq in LEN0. apply prove_invs.             (* len>=1 search *)
-        <base case through the guard-FALLTHROUGH + j to the body (0x1c); item-1 stepping>
-        <inductive: startof_prefix / preservation / destruct_inv>
-        destruct (cloq_key_in_array_dec (s' V_MEM32) arr key len) as [IN | NOT_IN].
-        + <found: handle_ex; exists (s' R_A4); reconcile pro + i*body_cont + found_partial + shut_f>
-        + <not-found: reconcile at i = len-1: pro + (len-1)*body_cont + body_exit + shut_nf>
-Two duals are trace-pre-validated: not-found exit at i = len-1, found witness a4 = i. If an arm
-fights, check the len>=1 BASE case first — it is the only boundary not yet trace-checked, and the
-likely failure is control-flow (tstep not traversing the `j` to land at 0x1c), not arithmetic.
+CLOSER (VALIDATED through arm 0; arm 1 is the remaining search step). Driven against this committed
+base via petanque -- the len>=1 base case, inductive setup, and ARM 0 (the 0x0->body transition) all
+close; ARM 1 (the 0x1c body step) is set up with the case-split and fans into found / not-found.
+
+  intros.
+  destruct (len =? 0) eqn:LEN0.
+  2:{ apply N.eqb_neq in LEN0. apply prove_invs.
+      (* BASE (0x0 entry inv): *)
+      simpl. rewrite ENTRY. unfold entry_addr. tstep r5_step.
+        now (repeat split; (try assumption); (try reflexivity)).
+      (* inductive setup: *)
+      intros. eapply startof_prefix in ENTRY; try eassumption.
+      eapply preservation_exec_prog in MDL; try eassumption; [idtac|apply lift_riscv_welltyped].
+      clear - ENTRY PRE MDL LEN0. rename t1 into t. rename s1 into s'.
+      destruct_inv 32 PRE.
+      (* ARM 0 (Addr 0 -> body): item-1 stepping CONFIRMED (tstep traverses guard-split + j): *)
+      destruct PRE as (Mem & A0 & A1 & A2 & LV & PA & Cyc). repeat (tstep r5_step).
+      apply N.eqb_eq in BC. contradiction.                 (* guard-TAKEN branch: BC len=0 vs LEN0 *)
+      exists 0. apply N.eqb_neq in BC.                     (* body inv at i=0 *)
+        repeat split; (try assumption); (try reflexivity); (try lia); (try (intros; lia));
+        (try (psimpl; lia)); (try hammer).
+      (* ARM 1 (Addr 28 = 0x1c) -- set up, NOT yet closed: *)
+      destruct PRE as (i & Hlt & A4 & A5 & A1eq & A0eq & A2eq & Memeq & NotFound & Cyc).
+      destruct (cloq_key_in_array_dec (s' V_MEM32) arr key len) as [IN | NOT_IN].
+      (* IN: `repeat (tstep r5_step)` -> 4 goals: found postcondition (left; exists (s' R_A4); use
+         NotFound to pin a4 as the FIRST match) + the i+1 body-inv continuation + latch splits.
+         NOT_IN: runs to len; not-found exit needs i=len-1 then STEP the final body+taken-latch
+         BEFORE reconciling pro + (len-1)*body_cont + body_exit + shut_nf (ordering, not arithmetic). *)
+  - apply N.eqb_eq in LEN0; subst len. apply prove_invs.   (* len=0 guard branch (mirror) *)
+
+Item 1 (guard/j stepping) is resolved. The two arm-1 duals are trace-pre-validated: not-found exit
+at i=len-1 (step the partial FIRST), found witness exists (s' R_A4) (NotFound pins a4 = first match).
 """
 from __future__ import annotations
 
