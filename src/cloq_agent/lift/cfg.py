@@ -39,6 +39,14 @@ def _reg(name: str) -> str:
     return f"R_{name.strip().upper()}"
 
 
+def _imm(tok: str) -> int | None:
+    """Parse an immediate operand (`4`, `0x4`, `-1`) -> int, or None if it is not a literal."""
+    try:
+        return int(tok.strip(), 0)
+    except ValueError:
+        return None
+
+
 def _shamt(operands: str) -> str:
     last = operands.split(",")[-1].strip()
     try:
@@ -192,18 +200,83 @@ class CFG:
                         continue
         return None
 
-    def array_search_shape(self, header: int):
-        """Recover the element-access shape `mem[base + f(index)]` of an array-search loop, for the
-        Phase-2 decidability template. Returns a `search_template.ArrayShape` or None.
+    def _loop_inductions(self, header: int) -> list[tuple[str, int]]:
+        """Every constant-increment induction in the loop: (R_<reg>, step) for each `addi rX,rX,k`.
+        Both the index counter (`addi i,i,1`) and a strength-reduced data pointer (`addi p,p,4`)
+        show up here — recovery is uniform over them (GAP 1)."""
+        out: list[tuple[str, int]] = []
+        for ins in sorted((i for s in self._natural_loop(header) for i in self.blocks[s].insns),
+                          key=lambda i: i.addr):
+            if ins.mnemonic not in ("addi", "c.addi"):
+                continue
+            ops = [o.strip() for o in ins.operands.split(",")]
+            if len(ops) >= 3 and ops[0] == ops[1]:
+                step = _imm(ops[2])
+            elif len(ops) == 2 and ins.mnemonic == "c.addi":
+                step = _imm(ops[1])
+            else:
+                step = None
+            if step is not None:
+                out.append((_reg(ops[0]), step))
+        return out
 
-        Pattern (RV32, find_in_array): `slli off, idx, k` ; `add ea, base, off` ; `lw v, 0(ea)`.
-        The `4 * i` variant (find_in_array_opt) reaches the element address without an `slli` (a
-        running pointer / `mul`); we report `shift_form=False` and the load's byte width as stride."""
+    def _reaching_param(self, addr: int, reg: str) -> str:
+        """Resolve `reg` to the parameter register whose ENTRY value it holds at program point
+        `addr` — following `mv`/`addi rd,rs,0` copies backwards from the latest definition strictly
+        before `addr`. This is what disambiguates gcc's register reuse: in se_find_eq `a0` is `arr`
+        at the pointer init (0x0) but `len` at the bound branch (after `mv a0,a2`)."""
+        defs = sorted((i for b in self.blocks.values() for i in b.insns
+                       if i.addr < addr and i.mnemonic in ("mv", "c.mv", "addi", "c.addi")),
+                      key=lambda i: i.addr)
+        cur = reg
+        progressed = True
+        while progressed:
+            progressed = False
+            for ins in reversed(defs):                       # latest def of `cur` before `addr`
+                ops = [o.strip() for o in ins.operands.split(",")]
+                if not ops or _reg(ops[0]) != cur:
+                    continue
+                if ins.mnemonic in ("mv", "c.mv") and len(ops) == 2:
+                    cur, progressed = _reg(ops[1]), True
+                elif ins.mnemonic in ("addi", "c.addi") and len(ops) >= 3 and _imm(ops[2]) == 0:
+                    cur, progressed = _reg(ops[1]), True
+                break                                        # non-copy def: `cur` settles here
+        return cur
+
+    def _loop_bound(self, header: int, ind_reg: str) -> tuple[str, int] | None:
+        """The (limit-register, branch-addr) of the exit branch that bounds `ind_reg`: a conditional
+        branch comparing `ind_reg` against another register, in a block that can leave the loop."""
+        loop = self._natural_loop(header)
+        for start in sorted(loop):
+            blk = self.blocks[start]
+            if all(s in loop for s in blk.succ):             # not an exiting block
+                continue
+            for ins in blk.insns:
+                if ins.mnemonic not in _BRANCH_OPS:
+                    continue
+                ops = [o.strip() for o in ins.operands.split(",")]
+                if len(ops) < 2:
+                    continue
+                r0, r1 = _reg(ops[0]), _reg(ops[1])
+                if ind_reg in (r0, r1):
+                    return (r1 if r0 == ind_reg else r0), ins.addr
+        return None
+
+    def array_search_shape(self, header: int):
+        """Recover the element-access shape `mem[base + stride*i]` of an array/search loop, for the
+        decidability template + timing. Returns a `search_template.ArrayShape` or None.
+
+        Two physical forms, one recovery (GAP 1):
+          * RUNNING POINTER (gcc -O2): `lw v, 0(p)` with `addi p,p,stride` — `p` is an induction
+            register; base = the param `p` was initialised from, stride = the increment;
+          * INDEXED/recomputed (vendored find_in_array): `slli off,i,k ; add ea,base,off ; lw v,0(ea)`.
+        Trip count: a separate `i<len` counter -> `bound_kind="index"`; a pointer bound `p<end` ->
+        `bound_kind="pointer_range"`. Register reuse is resolved via reaching-defs (`_reaching_param`)."""
         from .search_template import ArrayShape
 
-        insns = sorted((i for s in self._natural_loop(header) for i in self.blocks[s].insns),
-                       key=lambda i: i.addr)
-        load = next((i for i in insns if i.mnemonic in _LOADS), None)
+        loop_insns = sorted((i for s in self._natural_loop(header) for i in self.blocks[s].insns),
+                            key=lambda i: i.addr)
+        load = next((i for i in loop_insns if i.mnemonic in _LOADS), None)
         if load is None:
             return None
         elem_bytes = _LOAD_BYTES.get(load.mnemonic, 4)
@@ -211,26 +284,60 @@ class CFG:
         m = re.search(r"\(([^)]+)\)", ld_ops[-1]) if len(ld_ops) >= 2 else None
         if not m:
             return None
-        ea = _reg(m.group(1))                       # effective-address register, e.g. R_T1
-        add = next((i for i in insns if i.mnemonic in ("add", "c.add")
+        ea = _reg(m.group(1))                                # the load's address register
+        inductions = self._loop_inductions(header)
+
+        # --- running-pointer form: the load's address register is itself incremented in-loop ---
+        ptr = next(((r, s) for r, s in inductions if r == ea), None)
+        if ptr is not None:
+            # For a contiguous word walk the pointer increment (ptr[1]) equals the load width;
+            # elem_bytes drives both the load notation and the `base + elem_bytes*i` address. (A
+            # byte stride / mismatched increment is GAP 2's problem, deliberately out of scope here.)
+            init = self._reg_init_before_loop(header, ea)    # (src_reg, addr) of `mv ea, src`
+            base_reg = self._reaching_param(init[1], init[0]) if init else ea
+            counter = next(((r, s) for r, s in inductions if r != ea and s == 1), None)
+            ind = counter[0] if counter else ea
+            bound = self._loop_bound(header, ind)
+            bound_reg = self._reaching_param(bound[1], bound[0]) if bound else None
+            return ArrayShape(base_reg=base_reg, index_reg=ind, elem_bytes=elem_bytes,
+                              shift_form=False, moving_reg=ea, bound_reg=bound_reg,
+                              bound_kind="index" if counter else "pointer_range")
+
+        # --- indexed/recomputed form: ea = add base, (slli idx, k) ---
+        add = next((i for i in loop_insns if i.mnemonic in ("add", "c.add")
                     and _reg(i.operands.split(",")[0]) == ea), None)
         if add is None:
             return None
-        a_ops = [_reg(o) for o in add.operands.split(",")]   # [ea, X, Y]
+        a_ops = [_reg(o) for o in add.operands.split(",")]
         iv = self.induction_var(header)
         index_reg = iv[0] if iv else None
-
-        slli = next((i for i in insns if i.mnemonic in ("slli", "c.slli")), None)
+        bound = self._loop_bound(header, index_reg) if index_reg else None
+        bound_reg = self._reaching_param(bound[1], bound[0]) if bound else None
+        slli = next((i for i in loop_insns if i.mnemonic in ("slli", "c.slli")), None)
         if slli is not None:
             s_ops = [o.strip() for o in slli.operands.split(",")]
             off_reg = _reg(s_ops[0])
             base_reg = next((r for r in a_ops[1:] if r != off_reg), a_ops[1])
             return ArrayShape(base_reg=base_reg, index_reg=index_reg or _reg(s_ops[1]),
-                              elem_bytes=elem_bytes, shift_form=True)
-        # No shift: the other add operand is the base, index from the induction variable.
+                              elem_bytes=elem_bytes, shift_form=True, bound_reg=bound_reg)
         base_reg = a_ops[1] if a_ops[2] == index_reg else a_ops[2]
         return ArrayShape(base_reg=base_reg, index_reg=index_reg or a_ops[2],
-                          elem_bytes=elem_bytes, shift_form=False)
+                          elem_bytes=elem_bytes, shift_form=False, bound_reg=bound_reg)
+
+    def _reg_init_before_loop(self, header: int, reg: str) -> tuple[str, int] | None:
+        """The (source-reg, addr) of the latest `mv reg, src` / `addi reg, src, 0` before the loop —
+        where a strength-reduced pointer gets its starting (base) value."""
+        best: tuple[str, int] | None = None
+        for ins in sorted((i for b in self.blocks.values() for i in b.insns if i.addr < header),
+                          key=lambda i: i.addr):
+            ops = [o.strip() for o in ins.operands.split(",")]
+            if not ops or _reg(ops[0]) != reg:
+                continue
+            if ins.mnemonic in ("mv", "c.mv") and len(ops) == 2:
+                best = (_reg(ops[1]), ins.addr)
+            elif ins.mnemonic in ("addi", "c.addi") and len(ops) >= 3 and _imm(ops[2]) == 0:
+                best = (_reg(ops[1]), ins.addr)
+        return best
 
     def loop_mem_ops(self, header: int) -> set[str]:
         """Memory mnemonics that occur inside the loop body (loads/stores)."""

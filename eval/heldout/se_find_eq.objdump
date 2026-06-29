@@ -1,0 +1,28 @@
+
+/home/ryan/Projects/cloq-agent/eval/heldout/se_find_eq.o:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+00000000 <se_find_eq>:
+   0:	00050793          	addi	a5,a0,0
+   4:	00060513          	addi	a0,a2,0
+   8:	02060263          	beq	a2,zero,2c <.L2>
+   c:	00000713          	addi	a4,zero,0
+  10:	00c0006f          	jal	zero,1c <.L3>
+
+00000014 <.L11>:
+  14:	00170713          	addi	a4,a4,1
+  18:	00e50c63          	beq	a0,a4,30 <.L10>
+
+0000001c <.L3>:
+  1c:	0007a683          	lw	a3,0(a5)
+  20:	00478793          	addi	a5,a5,4
+  24:	feb698e3          	bne	a3,a1,14 <.L11>
+  28:	00070513          	addi	a0,a4,0
+
+0000002c <.L2>:
+  2c:	00008067          	jalr	zero,0(ra)
+
+00000030 <.L10>:
+  30:	00008067          	jalr	zero,0(ra)

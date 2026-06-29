@@ -1,0 +1,20 @@
+
+/home/ryan/Projects/cloq-agent/eval/heldout/ap_ptr_walk.o:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+00000000 <ap_ptr_walk>:
+   0:	00050793          	addi	a5,a0,0
+   4:	00000513          	addi	a0,zero,0
+   8:	00b7fc63          	bgeu	a5,a1,20 <.L4>
+
+0000000c <.L3>:
+   c:	0007a703          	lw	a4,0(a5)
+  10:	00478793          	addi	a5,a5,4
+  14:	00e50533          	add	a0,a0,a4
+  18:	feb7eae3          	bltu	a5,a1,c <.L3>
+  1c:	00008067          	jalr	zero,0(ra)
+
+00000020 <.L4>:
+  20:	00008067          	jalr	zero,0(ra)

@@ -216,20 +216,28 @@ flags; `eval/heldout/measure.py`). Findings:
 
 - **program-half READY** — `intake.generate_scaffold` emits a `Program_<func>` functor for both; both
   classify correctly as `search early-exit`.
-- **GAP 1 (upstream, newly revealed): shape recovery is itself twin-fragile.** gcc -O2 strength-reduces
-  `arr[i]` to a **running pointer** (`lw a3,0(a5)` ; `addi a5,a5,4`) — there is no `slli`/`add`, so
-  `cfg.array_search_shape` returns `None`. The vendored `find_in_array.objdump` carries the explicit
-  `slli;add;lw` index form; a real compile does not. Until recovery handles the running-pointer form
-  (base-pointer recovery, as in ct_swap's induction pointer), no template emits for held-out search.
+- **GAP 1 — DONE.** gcc -O2 strength-reduces `arr[i]` to a **running pointer** (`lw a3,0(a5)` ;
+  `addi a5,a5,4`) — no `slli`/`add`, so the old `cfg.array_search_shape` returned `None`. The recovery
+  is now **unified** over both physical forms (`lift/cfg.py`): it takes the induction that FEEDS THE
+  LOAD (the data pointer, step = stride) for the running-pointer form and the `slli;add` form for the
+  indexed one, returning the same `(reg, step)` representation. Register reuse is resolved by
+  reaching-defs (`_reaching_param`): in se_find_eq `a0` is `arr` at the pointer init but `len` at the
+  bound branch, so the recovered base is `R_A0` (arr) and the bound is `R_A2` (len), not the raw `a0`.
+  Trip count: `bound_kind="index"` (se_find_eq, `i<len`) vs `"pointer_range"` (ap_ptr_walk, `p<end`).
+  The **premise gate is the recovery oracle** — the stride-derived premises (`search_template.
+  shape_premises`) discharge for both held-out shapes (`tests/test_shape_recovery.py`), so a wrong
+  stride would be caught at generation time. Held to two shapes (indexed word search, running-pointer
+  word walk); byte stride is GAP 2's.
 - **GAP 2 (confirmed): no disjunctive timing.** `cfg.loop_timing` returns a single `(prefix, body)`,
   but `time_of_find_in_array` is a found/not-found **disjunction** (the partial-iteration cost differs
   on the two exit edges: `ttbgeu` vs `tfbgeu + … + ttbeq`). A held-out function can't reuse `time_of_*`;
   the CFG must emit the two-arm form. This is upstream of any closer — a wrong `time_of` closes nothing.
 - **GAP 3: the generic branch closer** (still the renamed gold leaves).
 
-Corrected order to "Phase 2 done to held-out": **(1) running-pointer shape recovery -> (2) generated
-disjunctive timing -> (3) uniform branch closer -> one held-out search function at Qed** (se_find_eq
-minimum, se_find_ge to prove the predicate generalized). The program-half is already wired.
+Corrected order to "Phase 2 done to held-out": ~~(1) running-pointer shape recovery~~ DONE -> **(2)
+generated disjunctive timing -> (3) uniform branch closer -> one held-out search function at Qed**
+(se_find_eq minimum, se_find_ge to prove the predicate generalized). The program-half is already
+wired, and GAP 1 now hands GAP 2 a clean `(base, stride, trip-count)` for both shapes.
 
 ## Next (see CLAUDE.md "Next tasks")
 

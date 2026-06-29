@@ -32,11 +32,23 @@ TEMPLATE_NAMES = (
 
 @dataclass(frozen=True)
 class ArrayShape:
-    """The recovered shape of an array-search loop's element access `mem[base + f(index)]`."""
-    base_reg: str            # register holding the array base (e.g. "R_A0")
-    index_reg: str           # register holding the loop index/counter (e.g. "R_A5")
-    elem_bytes: int          # element width in bytes (4 for uint32)
-    shift_form: bool         # True => `i << log2(bytes)` (slli); False => `bytes * i` (mul)
+    """The recovered shape of a loop's element access `mem[base + f(index)]`.
+
+    Covers two physical forms the lifter sees for the SAME logical `base + stride*i` access:
+      * indexed/recomputed (`slli;add;lw`) — `shift_form=True`, `moving_reg=None`;
+      * running pointer (`lw 0(p); addi p,p,stride`) — `shift_form=False`, `moving_reg` set to the
+        pointer register and `base_reg` traced to the register holding its ENTRY value (the base).
+    The trip count is uniform-ish: a separate `i<len` counter gives `bound_kind="index"` (the loop
+    runs `bound_reg` times); a pointer bound `p<end` gives `bound_kind="pointer_range"` (it runs
+    `(bound_reg - base)/stride` times). Both reduce to one `(reg, step)` induction = `(moving or
+    index reg, stride)`."""
+    base_reg: str            # register holding the array base at loop entry (e.g. "R_A0")
+    index_reg: str           # the induction register: counter, or the running pointer
+    elem_bytes: int          # element width in bytes (4 for uint32) == stride for these targets
+    shift_form: bool         # True => `i << log2(bytes)` (slli); False => `bytes * i` / running ptr
+    moving_reg: str | None = None   # the running-pointer register, or None for the indexed form
+    bound_reg: str | None = None    # the register bounding the loop (len, or the end pointer)
+    bound_kind: str = "index"       # "index" (runs bound_reg times) | "pointer_range" ((end-base)/stride)
 
     def addr_expr(self, index: str) -> str:
         """The Coq address offset expression for element `index` (a variable name or literal)."""
@@ -49,6 +61,25 @@ class ArrayShape:
     def load_notation(self) -> str:
         """The Picinae fixed-width load notation for this element width (Ⓓ = 32-bit word)."""
         return {1: "Ⓑ", 2: "Ⓦ", 4: "Ⓓ", 8: "Ⓠ"}.get(self.elem_bytes, "Ⓓ")
+
+
+def shape_premises(shape: ArrayShape, base: str = "base", trip: str = "n",
+                   endp: str = "endp") -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """The input well-formedness premises IMPLIED by a recovered shape, parameterized by the
+    recovered stride — returned as (binders, premises). Feeding these through the premise gate is
+    the GAP-1 recovery oracle: a wrong stride yields a degenerate or contradictory obligation that
+    fails to discharge, so a recovery bug is caught at generation time, not three gaps later.
+
+      * index form        — alignment `exists k', base = stride*k'` and bound `stride*n < 2^32`;
+      * pointer_range form — alignment and the end pointer reachable in whole strides from base:
+        `exists k', end = base + stride*k'`.
+    """
+    s = shape.elem_bytes
+    align = ("ALIGN", f"exists k', {base} = {s} * k'")
+    if shape.bound_kind == "pointer_range":
+        return ([(base, "N"), (endp, "N")],
+                [align, ("RANGE", f"exists k', {endp} = {base} + {s} * k'")])
+    return ([(base, "N"), (trip, "N")], [align, ("BOUND", f"{s} * {trip} < 2^32")])
 
 
 def decidability_block(shape: ArrayShape, prefix: str = "") -> str:
