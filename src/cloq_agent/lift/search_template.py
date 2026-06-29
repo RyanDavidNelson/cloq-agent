@@ -78,6 +78,25 @@ def time_of_definition(name: str, trip: str, t) -> str:
     )
 
 
+def time_of_bottom_test(name: str, trip: str, b) -> str:
+    """Render a `BottomTestTiming` as the Coq closed form for a rotated do-while + guard search.
+    A TWO-LEVEL match: on found_idx, then on `trip` inside the not-found arm so `len = 0` (the
+    guard that skips the body) is covered — keeping `time_of` total over its domain, the single
+    authority on cost, and forcing the closer (and the premise gate) to discharge the boundary."""
+    return (
+        f"  Definition {name} ({trip} : N) (found_idx : option N) (t : trace) :=\n"
+        f"      cycle_count_of_trace t =\n"
+        f"      match found_idx with\n"
+        f"      | Some i => {b.pro} + i * ({b.body_cont}) + {b.found_partial} + {b.shut_f}\n"
+        f"      | None => match {trip} with\n"
+        f"                | 0 => {b.guard}\n"
+        f"                | _ => {b.pro} + ({trip} - 1) * ({b.body_cont}) + {b.body_exit} "
+        f"+ {b.shut_nf}\n"
+        f"                end\n"
+        f"      end."
+    )
+
+
 def shape_premises(shape: ArrayShape, base: str = "base", trip: str = "n",
                    endp: str = "endp") -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """The input well-formedness premises IMPLIED by a recovered shape, parameterized by the

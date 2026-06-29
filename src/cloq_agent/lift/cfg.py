@@ -77,6 +77,26 @@ class SearchTiming:
 
 
 @dataclass
+class BottomTestTiming:
+    """The closed form of a gcc-rotated BOTTOM-test search loop (do-while + zero-length guard). The
+    bound test is fused into the iteration (`body_cont` = body + latch-fallthrough), so unlike the
+    top-test form the partials and the shutdowns BOTH fork per arm, and `len = 0` is a distinct
+    guard path. Rendered as a two-level match (found_idx, then len inside the not-found arm):
+
+        Some i => pro + i*body_cont + found_partial + shut_f
+        None   => match len with 0 => guard | _ => pro + (len-1)*body_cont + body_exit + shut_nf
+
+    Validated to reproduce the six hand-traces of se_find_eq (not-found/found at 0/1/2)."""
+    pro: str            # prologue, len>=1 (entry..loop, guard fallthrough)
+    body_cont: str      # a continuing iteration: body + latch with the bound test FALLTHROUGH
+    body_exit: str      # the last not-found iteration: body + latch with the bound test TAKEN
+    found_partial: str  # body up to the match branch's exit direction (no latch)
+    shut_nf: str        # not-found exit target..return
+    shut_f: str         # found exit target..return
+    guard: str          # the len=0 path: guard taken, skipping the loop entirely
+
+
+@dataclass
 class Insn:
     addr: int
     mnemonic: str
@@ -466,6 +486,87 @@ class CFG:
         shutdown = self._shutdown_terms(header)
         return SearchTiming(setup=setup, body=body, found_partial=found,
                             notfound_partial=notfound, shutdown=shutdown)
+
+    def bottom_test_timing(self, header: int) -> "BottomTestTiming | None":
+        """Derive the bottom-test (rotated do-while + guard) disjunctive timing — see
+        `BottomTestTiming`. Returns None unless this is a 2-exit bottom-test search with a
+        zero-length guard. Each piece is the literal per-instruction cost along its path, with the
+        bound test fused into `body_cont` at the latch and forked to taken in `body_exit`."""
+        if not self.loop_is_bottom_test(header):
+            return None
+        shape = self.array_search_shape(header)
+        if shape is None:
+            return None
+        lb = self._loop_bound(header, shape.index_reg)
+        if lb is None:
+            return None
+        loop = self._natural_loop(header)
+        loop_insns = sorted((i for s in loop for i in self.blocks[s].insns), key=lambda i: i.addr)
+        exits = [i for i in loop_insns if i.mnemonic in _BRANCH_OPS
+                 and (_branch_target(i.operands) not in loop or self._falls_out(i, loop))]
+        if len(exits) != 2:
+            return None
+        bound = next((b for b in exits if b.addr == lb[1]), None)
+        match = next((b for b in exits if b.addr != lb[1]), None)
+        if bound is None or match is None:
+            return None
+
+        all_insns = sorted((i for b in self.blocks.values() for i in b.insns), key=lambda i: i.addr)
+        lo = min(loop)
+        pro_insns = [i for i in all_insns if i.addr < lo]
+        guard = next((i for i in pro_insns if i.mnemonic in _BRANCH_OPS
+                      and _branch_target(i.operands) not in loop), None)
+        if guard is None:                       # no zero-length guard -> not the shape we handle
+            return None
+
+        body_insns = sorted(self.blocks[self._loop_entry_block(header)].insns, key=lambda i: i.addr)
+        latch_insns = sorted(self.blocks[self._block_of(lb[1])].insns, key=lambda i: i.addr)
+        m_stay = _branch_target(match.operands) in loop      # the match's stay-in-loop direction
+        b_stay = _branch_target(bound.operands) in loop
+
+        def terms(insns, overrides):
+            out = []
+            for ins in insns:
+                taken = (overrides.get(ins.addr, _branch_target(ins.operands) in loop)
+                         if ins.mnemonic in _BRANCH_OPS else None)
+                t = _insn_tconst(ins, taken)
+                if t:
+                    out.append(t)
+            return out
+
+        pro = terms(pro_insns, {guard.addr: False})          # guard falls through into the loop
+        body_cont = terms(body_insns, {match.addr: m_stay}) + terms(latch_insns, {bound.addr: b_stay})
+        body_exit = terms(body_insns, {match.addr: m_stay}) + terms(latch_insns, {bound.addr: not b_stay})
+        found_partial = terms([i for i in body_insns if i.addr <= match.addr], {match.addr: not m_stay})
+        guard_terms = (terms([i for i in pro_insns if i.addr < guard.addr], {})
+                       + [_insn_tconst(guard, True)]
+                       + self._straightline_from(_branch_target(guard.operands)))
+        return BottomTestTiming(
+            pro=" + ".join(pro), body_cont=" + ".join(body_cont), body_exit=" + ".join(body_exit),
+            found_partial=" + ".join(found_partial),
+            shut_nf=" + ".join(self._straightline_from(self._exit_target(bound, not b_stay))),
+            shut_f=" + ".join(self._straightline_from(self._exit_target(match, not m_stay))),
+            guard=" + ".join(t for t in guard_terms if t))
+
+    def _straightline_from(self, addr: int) -> list[str]:
+        """Per-instruction costs from `addr` to (and including) the first return — a shutdown tail."""
+        out: list[str] = []
+        for ins in sorted((i for b in self.blocks.values() for i in b.insns if i.addr >= addr),
+                          key=lambda i: i.addr):
+            term = _insn_tconst(ins, False if ins.mnemonic in _BRANCH_OPS else None)
+            if term:
+                out.append(term)
+            if ins.mnemonic in ("jalr", "ret"):
+                break
+        return out
+
+    def _exit_target(self, branch: "Insn", taken: bool) -> int | None:
+        """The address `branch` jumps to in its `taken` / fallthrough direction."""
+        tgt = _branch_target(branch.operands)
+        if taken:
+            return tgt
+        blk = self._block_of(branch.addr)
+        return next((s for s in self.blocks[blk].succ if s != tgt), None)
 
     def _falls_out(self, branch: "Insn", loop: set[int]) -> bool:
         """True if the branch's FALLTHROUGH successor leaves the loop (so it exits when not taken)."""
