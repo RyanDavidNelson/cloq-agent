@@ -113,9 +113,10 @@ data-structure loops**. The ablation pinned the wall precisely:
 - Surveying the corpus, **every** vendored search loop (find_in_array, find_in_array_opt,
   find_in_list) needs a program-specific decidability lemma (`key_in_…_dec`) + case analysis,
   because proving an exact WCET over an early-exit loop requires deciding the data-dependent branch.
-  This is bespoke ITP, not genericizable, and there is **no remaining generic ("simple") loop** in
-  this RISC-V corpus to gain. (The one clean accumulate loop, x86 `sum`, would need the AMD64 timing
-  pipeline.)
+  ~~This is bespoke ITP, not genericizable~~ — **superseded by Phase 2 (below)**: for the *array*
+  search loops the decidability lemma is a template parameterized by the recovered element address
+  (`arr + (i << 2)` vs `arr + 4 * i`); find_in_list (linked list) and the cyclic vListInsert are the
+  ones that genuinely stay bespoke.
 
 Conclusion: further synthesis/discharge micro-optimization on this corpus is not load-bearing. The
 next real capability requires a different tool (below), not another prompt or tactic tweak.
@@ -170,6 +171,31 @@ timing, not vacuously true.
 
 The remaining ct_swap gap is **synthesis** producing that `exists`-index invariant; discharge no
 longer blocks it.
+
+## Phase 2 — array-search decidability as a TEMPLATE (find_in_array)
+
+The Phase-1 ablation called `key_in_array_dec` "bespoke, not genericizable." It isn't: find_in_array
+and find_in_array_opt carry the *same* lemma differing only in the element address — `arr + (i << 2)`
+vs `arr + 4 * i`. So it is a template parameterized by the recovered array shape (base register,
+index register, element width, shift-vs-mul form).
+
+Built (`lift/search_template.py`, `lift/cfg.py:array_search_shape`):
+- **shape recovery** — from the loop body `slli off, idx, k ; add ea, base, off ; lw v, 0(ea)`,
+  recover `ArrayShape(base, index, elem_bytes, shift_form)` (unit-tested on the find_in_array
+  objdump -> base R_A0, index R_A5, 4 bytes, shift form);
+- **emitter** — `key_in_array`, the index trichotomy `lt_impl_lt_or_eq`, the decidability
+  `key_in_array_dec`, the found/not-found **disjunction** `timing_postcondition`, and the case-split
+  `destruct (key_in_array_dec …) as [IN | NOT_IN]`, all specialised to the shape;
+- **verified (live pet-server)**: the emitted `key_in_array_dec` type-checks for BOTH address forms
+  (`tests/test_search_template.py`) — the genericity claim, proven, not asserted;
+- the search-loop **synthesis hint** now names the concrete emitted predicate/case-split for the
+  recovered shape.
+
+Honest scope: this makes the decidability *scaffold* generic and machine-emitted (no per-program
+hand copy). The vendored search proof's leaf branches (the `apply N.ltb_lt in BC` / `N.mod_small`
+massaging) and the full end-to-end rewire (a synthesized find_in_array using the EMITTED defs
+instead of `require find_in_array_proof`) are the remaining work. **find_in_list** (needs list
+theory) and the cyclic **vListInsert** (uniqueness-in-a-cycle) stay genuinely bespoke — not promised.
 
 ## Next (see CLAUDE.md "Next tasks")
 

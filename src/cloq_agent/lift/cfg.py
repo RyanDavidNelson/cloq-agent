@@ -31,6 +31,7 @@ _SHIFT = {"slli": "tslli", "srli": "tsrli", "srai": "tsrai"}
 _BRANCH_OPS = {"beq", "bne", "blt", "bge", "bltu", "bgeu"}
 _LOADS = {"lw", "lh", "lhu", "lb", "lbu"}
 _STORES = {"sw", "sh", "sb"}
+_LOAD_BYTES = {"lw": 4, "lh": 2, "lhu": 2, "lb": 1, "lbu": 1}
 
 
 def _reg(name: str) -> str:
@@ -191,6 +192,46 @@ class CFG:
                         continue
         return None
 
+    def array_search_shape(self, header: int):
+        """Recover the element-access shape `mem[base + f(index)]` of an array-search loop, for the
+        Phase-2 decidability template. Returns a `search_template.ArrayShape` or None.
+
+        Pattern (RV32, find_in_array): `slli off, idx, k` ; `add ea, base, off` ; `lw v, 0(ea)`.
+        The `4 * i` variant (find_in_array_opt) reaches the element address without an `slli` (a
+        running pointer / `mul`); we report `shift_form=False` and the load's byte width as stride."""
+        from .search_template import ArrayShape
+
+        insns = sorted((i for s in self._natural_loop(header) for i in self.blocks[s].insns),
+                       key=lambda i: i.addr)
+        load = next((i for i in insns if i.mnemonic in _LOADS), None)
+        if load is None:
+            return None
+        elem_bytes = _LOAD_BYTES.get(load.mnemonic, 4)
+        ld_ops = [o.strip() for o in load.operands.split(",")]
+        m = re.search(r"\(([^)]+)\)", ld_ops[-1]) if len(ld_ops) >= 2 else None
+        if not m:
+            return None
+        ea = _reg(m.group(1))                       # effective-address register, e.g. R_T1
+        add = next((i for i in insns if i.mnemonic in ("add", "c.add")
+                    and _reg(i.operands.split(",")[0]) == ea), None)
+        if add is None:
+            return None
+        a_ops = [_reg(o) for o in add.operands.split(",")]   # [ea, X, Y]
+        iv = self.induction_var(header)
+        index_reg = iv[0] if iv else None
+
+        slli = next((i for i in insns if i.mnemonic in ("slli", "c.slli")), None)
+        if slli is not None:
+            s_ops = [o.strip() for o in slli.operands.split(",")]
+            off_reg = _reg(s_ops[0])
+            base_reg = next((r for r in a_ops[1:] if r != off_reg), a_ops[1])
+            return ArrayShape(base_reg=base_reg, index_reg=index_reg or _reg(s_ops[1]),
+                              elem_bytes=elem_bytes, shift_form=True)
+        # No shift: the other add operand is the base, index from the induction variable.
+        base_reg = a_ops[1] if a_ops[2] == index_reg else a_ops[2]
+        return ArrayShape(base_reg=base_reg, index_reg=index_reg or a_ops[2],
+                          elem_bytes=elem_bytes, shift_form=False)
+
     def loop_mem_ops(self, header: int) -> set[str]:
         """Memory mnemonics that occur inside the loop body (loads/stores)."""
         loop = self._natural_loop(header)
@@ -275,8 +316,19 @@ class CFG:
         else:
             parts.append(f"use `exists i, i <= len /\\ cycle_count_of_trace t' = {rhs}`.")
         if self.data_dependent_exit(a):
-            parts.append("FIX #3 (search/early-exit): the exit is data-dependent — case-split with "
-                         "`decide` on the loaded predicate; the bound is a `<=` over the length.")
+            shape = self.array_search_shape(a)
+            if shape is not None:
+                addr = shape.addr_expr("i")
+                parts.append(
+                    f"FIX #3 (search/early-exit): the exit is data-dependent. The element access is "
+                    f"`mem {shape.load_notation}[arr + ({addr})]` (base {shape.base_reg}, index "
+                    f"{shape.index_reg}); the exit arm's postcondition is the found/not-found "
+                    f"DISJUNCTION over `key_in_array`, and the discharge case-splits with "
+                    f"`destruct (key_in_array_dec (s' V_MEM32) arr key len) as [IN | NOT_IN]` "
+                    f"(both the predicate and its decidability are emitted from this shape).")
+            else:
+                parts.append("FIX #3 (search/early-exit): the exit is data-dependent — case-split "
+                             "with `decide` on the loaded predicate; the bound is a `<=` over len.")
         if self.aliased_stores(a):
             parts.append("FIX #4 (aliasing): the body stores through a pointer — carry "
                          "`noverlaps`/`getmem_noverlap` side-conditions for the written addresses.")

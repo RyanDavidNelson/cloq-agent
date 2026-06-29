@@ -40,19 +40,25 @@ place. Do **not** redo any of this:
   the positional gold scripts. One unified tactic closes **both** the counter loop (addloop) and
   the **array/pointer loop (ct_swap)** with no LLM, given a correct invariant — validated
   non-vacuous by cycle-form mutation (`eval/mutate.py`, proof-only).
+- **Phase 2** (`lift/search_template.py`, `lift/cfg.py:array_search_shape`): the array-search
+  **decidability is a TEMPLATE**, not bespoke — recover the element shape (`arr + (i << 2)` vs
+  `arr + 4 * i`) from the loop body and emit `key_in_array` / `key_in_array_dec` / the found/
+  not-found disjunction `timing_postcondition` / the `destruct (key_in_array_dec …)` case-split.
+  Both address forms are verified to type-check via the pet-server. Remaining: the search proof's
+  bespoke leaf branches + the end-to-end rewire off `require find_in_array_proof`.
 
 **Measured (in-distribution / recall-leaning, NOT held-out):**
 `cloq-agent eval list_easy_four` -> 3/4 synth (uxListRemove fails) - `eval loop_easy` -> 1/3 synth
-(only addloop passes) - `pytest tests/` -> 118 passed / 5 skipped (in the agent container).
+(only addloop passes) - `pytest tests/` -> 125 passed / 5 skipped (in the agent container).
 
 **The ceiling (the important part).** Discharge now closes **straight-line**, **pure counter loop**,
 and **array/pointer loop** (ct_swap) GIVEN a correct invariant. Remaining gaps:
 - array/pointer **end-to-end**: discharge is solved; the open part is **synthesis** emitting the
   `exists`-index invariant (the model's job, or a future deterministic array deriver);
-- search loop w/ data-dependent early exit (`find_in_array`, `find_in_list`) — needs a
-  program-specific decidability case-split (`key_in_..._dec`); **Phase 2** (templated from the
-  recovered array shape for `find_in_array`/`find_in_array_opt`; `find_in_list`/cyclic
-  `vListInsert` stay open);
+- search loop w/ data-dependent early exit (`find_in_array`): the decidability case-split is now
+  **templated + emitted** (Phase 2, verified to compile both address forms); remaining = the
+  bespoke leaf branches + the end-to-end rewire. `find_in_list` (list theory) and cyclic
+  `vListInsert` (uniqueness-in-a-cycle) stay genuinely bespoke;
 - memory-aliasing branch (`uxListRemove`) — needs `noverlaps`/`getmem_noverlap` reasoning.
 
 ## Deferred (out of scope for now)
