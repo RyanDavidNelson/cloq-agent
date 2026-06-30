@@ -58,6 +58,29 @@ def test_decidability_block_specialises_address_and_compiles_shape():
     assert block.replace("i << 2", "4 * i").replace("len << 2", "4 * len") == opt
 
 
+def test_ge_predicate_swaps_only_the_comparison_relation():
+    """se_find_ge generalisation: the `>=` predicate changes ONLY the membership relation, its
+    decider, and the first-match negation — the address specialisation and the proof body are
+    untouched, so the same template closes a different comparison."""
+    from cloq_agent.lift.search_template import PRED_EQ, PRED_GE
+
+    shape = ArrayShape("R_A0", "R_A5", 4, shift_form=False)
+    eq = decidability_block(shape, predicate=PRED_EQ)
+    ge = decidability_block(shape, predicate=PRED_GE)
+    # ge membership is `key <= elem`, decided by leb_spec0 (N has no le_dec sumbool)
+    assert "exists i, i < len /\\ key <= mem Ⓓ[arr + (4 * i)]" in ge
+    assert "N.leb_spec0 key (mem Ⓓ[arr + (4 * len)])" in ge
+    assert "N.eq_dec" not in ge and "= key" not in ge.split("key_in_array_dec")[0]
+    # the only textual difference is the predicate strings; the proof skeleton is shared verbatim
+    norm = (ge.replace("key <= mem Ⓓ[arr + (4 * i)]", "mem Ⓓ[arr + (4 * i)] = key")
+              .replace("N.leb_spec0 key (mem Ⓓ[arr + (4 * len)])",
+                       "N.eq_dec (mem Ⓓ[arr + (4 * len)]) key"))
+    assert norm == eq
+    # the timing postcondition first-match flips `<> key` to `< key` (the ge negation)
+    gp = timing_postcondition_block(shape, "time_of_ge", predicate=PRED_GE)
+    assert "forall j, j < i -> mem Ⓓ[arr + (4 * j)] < key" in gp
+
+
 def test_timing_postcondition_is_found_notfound_disjunction():
     block = timing_postcondition_block(ArrayShape("R_A0", "R_A5", 4, True), "time_of_find")
     assert "\\/" in block                                   # found OR not-found

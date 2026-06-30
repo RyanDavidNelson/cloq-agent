@@ -31,6 +31,40 @@ TEMPLATE_NAMES = (
 
 
 @dataclass(frozen=True)
+class Predicate:
+    """The element-vs-key comparison a search loop tests at the found index. The decidability
+    template and the timing postcondition are byte-identical across predicates EXCEPT this relation,
+    its decision procedure, and the negation the first-match clause uses. The decidability proof
+    body itself is predicate-agnostic — it only ever consumes the decided fact and its negation — so
+    a new comparison is a three-string change, not a new proof.
+
+      * `eq` — find_in_array / se_find_eq (`==`): found when `mem[..] = key`;
+      * `ge` — se_find_ge (`>=`): found when `key <= mem[..]` (the loop's `bltu elem,key` continues
+        while `elem < key` and falls through to the return when `elem >= key`).
+    """
+    name: str
+    holds_fmt: str    # membership relation at the found index, e.g. "{e} = {key}" / "{key} <= {e}"
+    neg_fmt: str      # its negation for the first-match clause, e.g. "{e} <> {key}" / "{e} < {key}"
+    decide_fmt: str   # the sumbool decider, e.g. "N.eq_dec ({e}) {key}" / "N.le_dec {key} ({e})"
+
+    def holds(self, elem: str, key: str) -> str:
+        return self.holds_fmt.format(e=elem, key=key)
+
+    def neg(self, elem: str, key: str) -> str:
+        return self.neg_fmt.format(e=elem, key=key)
+
+    def decide(self, elem: str, key: str) -> str:
+        return self.decide_fmt.format(e=elem, key=key)
+
+
+# `decide` must be a term `destruct`s into {holds}+{~holds}. `N.eq_dec` is a genuine sumbool;
+# N has no `le_dec`, so ge uses `N.leb_spec0 key e : reflect (key <= e) (key <=? e)` — its two
+# constructors carry exactly `key <= e` / `~ key <= e`, so the decidability proof body is unchanged.
+PRED_EQ = Predicate("eq", "{e} = {key}", "{e} <> {key}", "N.eq_dec ({e}) {key}")
+PRED_GE = Predicate("ge", "{key} <= {e}", "{e} < {key}", "N.leb_spec0 {key} ({e})")
+
+
+@dataclass(frozen=True)
 class ArrayShape:
     """The recovered shape of a loop's element access `mem[base + f(index)]`.
 
@@ -116,10 +150,13 @@ def shape_premises(shape: ArrayShape, base: str = "base", trip: str = "n",
     return ([(base, "N"), (trip, "N")], [align, ("BOUND", f"{s} * {trip} < 2^32")])
 
 
-def decidability_block(shape: ArrayShape, prefix: str = "") -> str:
+def decidability_block(shape: ArrayShape, prefix: str = "",
+                       predicate: Predicate = PRED_EQ) -> str:
     """The `key_in_array` + `lt_impl_lt_or_eq` + `key_in_array_dec` Coq definitions for `shape`.
     Goes inside the timing functor (needs `memory`/`addr`/the load notation in scope). Verbatim the
-    vendored proof's structure, with the element address specialised to the recovered shape.
+    vendored proof's structure, with the element address specialised to the recovered shape and the
+    comparison specialised to `predicate` (the proof body is predicate-agnostic — only `key_in_array`
+    and the `destruct (… decide)` change).
 
     `prefix` namespaces the emitted names (e.g. `cloq_`) so they do not clash with identically-named
     definitions pulled in from a reused vendored functor (the lifted program still comes from there;
@@ -127,10 +164,12 @@ def decidability_block(shape: ArrayShape, prefix: str = "") -> str:
     ld = shape.load_notation
     addr_i = shape.addr_expr("i")
     addr_len = shape.addr_expr("len")
+    elem_i = f"mem {ld}[arr + ({addr_i})]"
+    elem_len = f"mem {ld}[arr + ({addr_len})]"
     p = prefix
     return f"""\
   Definition {p}key_in_array (mem : memory) (arr : addr) (key : N) (len : N) : Prop :=
-      exists i, i < len /\\ mem {ld}[arr + ({addr_i})] = key.
+      exists i, i < len /\\ {predicate.holds(elem_i, "key")}.
 
   Lemma {p}lt_impl_lt_or_eq : forall x y, x < 1 + y -> x = y \\/ x < y.
   Proof. lia. Qed.
@@ -143,7 +182,7 @@ def decidability_block(shape: ArrayShape, prefix: str = "") -> str:
       - right. intro. destruct H as (idx & Contra & _). lia.
       - destruct IHlen as [IN | NOT_IN].
           -- left. destruct IN as (idx & Lt & Eq). exists idx. split. lia. assumption.
-          -- destruct (N.eq_dec (mem {ld}[arr + ({addr_len})]) key).
+          -- destruct ({predicate.decide(elem_len, "key")}).
               + left. exists len. split. lia. assumption.
               + right. intro. destruct H as (idx & Lt & Eq).
                   assert (idx = len). {{
@@ -154,20 +193,23 @@ def decidability_block(shape: ArrayShape, prefix: str = "") -> str:
   Qed."""
 
 
-def timing_postcondition_block(shape: ArrayShape, time_of_search: str, prefix: str = "") -> str:
+def timing_postcondition_block(shape: ArrayShape, time_of_search: str, prefix: str = "",
+                               predicate: Predicate = PRED_EQ) -> str:
     """The found/not-found timing DISJUNCTION. `time_of_search` is the name of the pinned cycle
     closed form `time_of_<f> len (option index) t` (derived from cfg.loop_timing). The first-match
-    `forall j < i, mem[..] <> key` clause makes the `Some i` the FIRST hit, so the bound is exact."""
+    `forall j < i, ~ pred(mem[..], key)` clause makes the `Some i` the FIRST hit, so the bound is
+    exact; `predicate` selects the comparison (`= key` / `<> key` for eq, `key <= …` / `… < key`
+    for ge)."""
     ld = shape.load_notation
-    addr_i = shape.addr_expr("i")
-    addr_j = shape.addr_expr("j")
+    elem_i = f"mem {ld}[arr + ({shape.addr_expr('i')})]"
+    elem_j = f"mem {ld}[arr + ({shape.addr_expr('j')})]"
     return f"""\
   Definition {prefix}timing_postcondition (mem : memory) (arr : addr) (key : N) (len : N)
           (t : trace) : Prop :=
-      (exists i, i < len /\\ mem {ld}[arr + ({addr_i})] = key /\\
-          (forall j, j < i -> mem {ld}[arr + ({addr_j})] <> key) /\\
+      (exists i, i < len /\\ {predicate.holds(elem_i, "key")} /\\
+          (forall j, j < i -> {predicate.neg(elem_j, "key")}) /\\
           {time_of_search} len (Some i) t) \\/
-      ((~ exists i, i < len /\\ mem {ld}[arr + ({addr_i})] = key) /\\
+      ((~ exists i, i < len /\\ {predicate.holds(elem_i, "key")}) /\\
           {time_of_search} len None t)."""
 
 
@@ -179,12 +221,14 @@ def case_split_tactic(mem_reg: str = "s' V_MEM32", base: str = "arr",
     return f"destruct ({prefix}key_in_array_dec ({mem_reg}) {base} {key} {length}) as [IN | NOT_IN]."
 
 
-def template_defs(shape: ArrayShape, time_of_search: str, prefix: str = "cloq_") -> str:
+def template_defs(shape: ArrayShape, time_of_search: str, prefix: str = "cloq_",
+                  predicate: Predicate = PRED_EQ) -> str:
     """The full emitted block for an array-search target: the decidability lemmas + the found/
-    not-found timing disjunction, namespaced by `prefix`. Injected into the generated scaffold
-    (`TargetSpec.search_defs`) so the proof's case-split runs on emitted defs, not vendored ones."""
-    return decidability_block(shape, prefix) + "\n\n" + \
-        timing_postcondition_block(shape, time_of_search, prefix)
+    not-found timing disjunction, namespaced by `prefix` and specialised to `predicate`. Injected
+    into the generated scaffold (`TargetSpec.search_defs`) so the proof's case-split runs on emitted
+    defs, not vendored ones."""
+    return decidability_block(shape, prefix, predicate) + "\n\n" + \
+        timing_postcondition_block(shape, time_of_search, prefix, predicate)
 
 
 def prefix_template_names(text: str, prefix: str = "cloq_") -> str:
