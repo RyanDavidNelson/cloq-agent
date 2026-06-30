@@ -79,6 +79,20 @@ def test_post_jobs_returns_id_and_completes_with_report(client):
     assert [s["name"] for s in rep["stages"]][0] == "disassemble"
 
 
+def test_c_upload_routes_through_the_compile_stage(client):
+    """A .c upload takes the compile front door (run_prove_c), so its first stage is `compile`,
+    not `disassemble`. Holds with or without the toolchain: junk C either fails to compile or
+    the toolchain is absent — either way the first stage emitted is `compile`."""
+    r = client.post("/jobs", data={"mcu": "neorv32"},
+                    files={"file": ("sum3.c", b"unsigned sum3(unsigned a){return a;}\n",
+                                    "text/x-c")})
+    assert r.status_code == 202, r.text
+    jid = r.json()["job_id"]
+    rep = _wait(client, jid)["report"]
+    assert rep is not None
+    assert [s["name"] for s in rep["stages"]][0] == "compile"
+
+
 def test_rejects_unknown_mcu(client):
     r = client.post("/jobs", data={"mcu": "stm32"},
                     files={"file": ("prog.o", JUNK, "application/octet-stream")})

@@ -47,13 +47,15 @@ Every solved proof is written back to the library, so the system accrues skill o
 target ─▶ spec-lint (reject trivial specs)
        ─▶ retrieve analogues ─▶ LLM: synthesize invariant set
        ─▶ render theorem (theorem_builder) ─▶ petanque.start
-       ─▶ hammer ladder ──closed?──▶ Qed ─▶ FPGA oracle ─▶ store in RAG
+       ─▶ hammer ladder ──closed?──▶ Qed ─▶ premise/mutation gates ─▶ store in RAG
               └─residual goals─▶ DFS proof search (backtracking) ─▶ Qed | budget exhausted
 ```
 
 Budgets bound invariant attempts and the search (depth, total tactic runs, LLM calls); escalation to
-a stronger model triggers only after the local budget is spent. The FPGA oracle can veto a "proved"
-result if measured cycles disagree with the prediction (an unsound timing model).
+a stronger model triggers only after the local budget is spent. Non-vacuity is enforced in-proof
+(`proof/premise_check.py` premise satisfiability; `eval/mutate.py` cycle-form mutation). The
+orchestrator keeps an *optional* `fpga_oracle` veto hook, but that hardware track is **deferred /
+parked** and is not wired on the critical path — output is proof-only.
 
 ## Proof search: DFS with backtracking (`agent/_discharge`)
 
@@ -86,6 +88,7 @@ branching target (the FreeRTOS list set, ct-swap, chacha20).
 ## What's genuinely ours vs. reused
 
 Ours: the orchestration loop, invariant-synthesis and tactic-repair prompting, the RAG wiring,
-the spec-lint/mutation non-triviality gates, the FPGA measurement firmware/host, the eval harness.
-Everything load-bearing underneath — proof checking, automation, the softcore, the LSP — is
-established open source. That's the point.
+the spec-lint/mutation/premise non-triviality gates, the C-intake compile/lift glue, the FastAPI
+service + React GUI, the eval harness. (The FPGA measurement firmware/host also lives here but is
+**parked** — see `docs/RESULTS.md`.) Everything load-bearing underneath — proof checking,
+automation, the softcore timing model, the LSP — is established open source. That's the point.

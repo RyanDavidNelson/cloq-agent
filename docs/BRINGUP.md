@@ -1,8 +1,13 @@
 # Bring-up checklist
 
-Two tracks run in parallel. Track A (software) has no board dependency and can start today on the
-5090. Track B (FPGA) has the longest tail, so de-risk it early. The first real milestone is the
-intersection: `addloop` proven *and* its cycle count measured on hardware.
+> **Status:** Track A (software / proof engine) is the **live** path and is well past bring-up —
+> follow it to get `addloop` proving. Track B (FPGA) is **deferred / parked**; it is retained below
+> as design intent only and has **no dependency** in the build/run/CI/GUI. The current deliverable is
+> proof-only (closed form + predicted range), so the "convergence" milestone (measured == predicted)
+> does not apply today. See `docs/RESULTS.md`.
+
+Track A (software) has no board dependency. The first software milestone is `addloop` proven
+end-to-end with no LLM.
 
 ## Track A — software / proof engine (workstation)
 
@@ -14,7 +19,7 @@ intersection: `addloop` proven *and* its cycle count measured on hardware.
 4. `ollama pull qwen3-coder:30b` (workhorse on the 5090) and confirm `cloq-agent index` runs.
 5. `cloq-agent prove addloop` — should close via the gold invariant + hammer ladder, no LLM.
 
-## Track B — FPGA oracle (AUP-ZU3)
+## Track B — FPGA oracle (AUP-ZU3)  *(DEFERRED — parked, do not run for the current deliverable)*
 
 1. Install **Vivado/Vitis** (free Standard edition is fine for the XCZU3EG) and the **AUP-ZU3
    board files** from RealDigital. Confirm the exact part/speed-grade string from the board files.
@@ -27,7 +32,11 @@ intersection: `addloop` proven *and* its cycle count measured on hardware.
 5. `make -C fpga/firmware TARGET_OBJ=addloop.o`, then on the board
    `python fpga/host/measure.py --target addloop --sweep-inputs 64`.
 
-## Convergence — the first milestone
+## Convergence — the first milestone  *(parked: needs Track B)*
+
+> Deferred with Track B. For the current proof-only deliverable the milestone is simply `addloop`
+> proven in Track A with the CFG-derived closed form `(x)·(ft+2+2+tb)`; the hardware cross-check
+> below is parked.
 
 `addloop` proves in Track A and measures in Track B, and the measured cycles match the Cloq
 closed form `(x)·(ft+2+2+tb)` across the input sweep. From here, everything (RAG-driven synthesis,

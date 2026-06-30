@@ -1,4 +1,11 @@
-# FPGA oracle (AMD AUP-ZU3)
+# FPGA oracle (AMD AUP-ZU3) — DEFERRED / parked
+
+> **This track is parked and off the critical path.** It has no dependency in the build, run, CI,
+> GUI, API, report, or transfer metric, and the current deliverable is **proof-only** (closed form
+> + predicted range). The contents here are retained as design intent. The two checks the hardware
+> used to provide are stood in for by in-proof anti-vacuity gates — `eval/mutate.py` (corrupt the
+> cycle closed form → the proof must break) and `proof/premise_check.py` (premise satisfiability) —
+> see `docs/RESULTS.md` and `CLAUDE.md`. Re-activating this track is future work.
 
 The oracle grounds every formal proof in silicon: it runs the *same* lifted binary on a real
 RISC-V softcore (**NEORV32**) and checks that measured cycle counts match the Cloq prediction,

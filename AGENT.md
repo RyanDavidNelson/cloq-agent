@@ -1,10 +1,14 @@
 # A primer on the cloq-agent LLM loop
 
-A teaching companion to [`PRIMER.md`](PRIMER.md). The primer explained the *proof* side — how a
-Cloq timing proof works. This explains the *AI* side — how a local language model is wired into that
-proof process to guess the one creative ingredient, without ever being trusted. It assumes you've
-read the primer (so you know what an invariant, `whammer`, and `satisfies_all` are) but no machine-
-learning background.
+This explains the *AI* side — how a language model is wired into the proof process to guess the one
+creative ingredient (the invariant), without ever being trusted. Background on the *proof* side
+(what an invariant, `whammer`, and `satisfies_all` are) is in the Cloq paper and `docs/SPEC.md`; no
+machine-learning background is assumed.
+
+> **Note:** the **FPGA oracle** appears below (in the loop diagram and as an optional `fpga_oracle`
+> veto hook) as design intent. That hardware track is **deferred / parked** and is *not* wired on
+> the critical path — the live non-vacuity gates are in-proof (`proof/premise_check.py`,
+> `eval/mutate.py`). Read every "FPGA oracle" step as "skipped / optional" today. See `docs/RESULTS.md`.
 
 ---
 
@@ -221,8 +225,8 @@ plain English:
    hammer-first at every node, the deterministic structural prelude (`apply prove_invs … destruct_inv`)
    at the root, LLM tactic-repair on the fan-out subgoals deeper, escalating the model after N calls.
    A node is solved iff `state.finished`; dead-end branches are abandoned by backtracking.
-7. On `Qed`, optionally let the **FPGA oracle veto** the result (measured cycles must match the proven
-   formula).
+7. On `Qed`, run the in-proof non-vacuity gates (premise satisfiability; cycle-form mutation). *(An
+   FPGA-oracle veto is an optional, parked hook — not on the critical path; see the note at the top.)*
 8. **Store the solved proof back into the RAG corpus**, so the next target can retrieve it.
 
 That last step is **skill accumulation**: each success enriches the retriever, so the system improves
@@ -368,7 +372,6 @@ suggestions and hard budgets.
 
 ## See also
 
-- [`PRIMER.md`](PRIMER.md) — the proof side (lifter, IL, invariants, `whammer`, `lia`), with the
-  `addloop` proof annotated line by line.
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the reuse map and why each off-the-shelf component was chosen.
-- [`SPEC.md`](SPEC.md) — the full project spec, eval metrics, and the FPGA oracle design.
+- [`docs/RESULTS.md`](docs/RESULTS.md) — what proves today, the held-out number, and the precise ceiling.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the reuse map and why each off-the-shelf component was chosen.
+- [`docs/SPEC.md`](docs/SPEC.md) — the full original project spec and eval metrics (FPGA oracle now deferred).

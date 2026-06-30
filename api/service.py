@@ -16,8 +16,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from cloq_agent.config import Config
-from cloq_agent.pipeline import run_prove_machine_code
+from cloq_agent.lift.compile import sanitize_ident
+from cloq_agent.pipeline import run_prove_c, run_prove_machine_code
 from cloq_agent.report import ProveCReport, StageRecord
+
+
+# Upload extensions routed through the C-compile front door (gcc -> object) instead of the
+# disassemble-an-object front door. Anything else is treated as a prebuilt RISC-V ELF/object.
+C_SOURCE_SUFFIXES = (".c", ".i")
 
 
 @dataclass
@@ -29,6 +35,7 @@ class Job:
     secret: str | None
     mc_path: Path
     filename: str
+    is_c: bool = False                 # True -> compile the upload with riscv gcc first
     status: str = "queued"             # queued | running | done | error
     events: list[dict] = field(default_factory=list)   # stage-transition records, in order
     report: ProveCReport | None = None
@@ -39,7 +46,8 @@ class Job:
     def public(self) -> dict:
         return {
             "id": self.id, "mcu": self.mcu, "func": self.func, "property": self.prop,
-            "filename": self.filename, "status": self.status, "created_at": self.created_at,
+            "filename": self.filename, "is_c": self.is_c,
+            "status": self.status, "created_at": self.created_at,
             "stages": list(self.events),
             "report": self.report.to_dict() if self.report else None,
             "error": self.error,
@@ -67,7 +75,9 @@ class JobManager:
         name = Path(filename or "program.o").name or "program.o"
         mc_path = jdir / name
         mc_path.write_bytes(mc_bytes)
-        job = Job(id=jid, mcu=mcu, func=func, prop=prop, secret=secret, mc_path=mc_path, filename=name)
+        is_c = name.lower().endswith(C_SOURCE_SUFFIXES)
+        job = Job(id=jid, mcu=mcu, func=func, prop=prop, secret=secret, mc_path=mc_path,
+                  filename=name, is_c=is_c)
         with self._lock:
             self._jobs[jid] = job
         self._pool.submit(self._run, job)
@@ -80,10 +90,21 @@ class JobManager:
             job.events.append({"name": rec.name, "status": rec.status.value, "detail": rec.detail})
 
         try:
-            job.report = run_prove_machine_code(
-                mc_path=job.mc_path, func=job.func, cfg=self.cfg, repo_root=self.repo_root,
-                mcu=job.mcu, prop=job.prop, secret=job.secret, on_stage=on_stage,
-            )
+            if job.is_c:
+                # A C upload is compiled with the pinned riscv gcc first (same front door as the
+                # CLI `prove-c`). `func` names the symbol to prove; default to the file stem, which
+                # is the convention for a self-contained unit (e.g. sum3.c defines `sum3`).
+                func = job.func or sanitize_ident(Path(job.filename).stem)
+                job.func = func
+                job.report = run_prove_c(
+                    c_path=job.mc_path, func=func, cfg=self.cfg, repo_root=self.repo_root,
+                    prop=job.prop, secret=job.secret, on_stage=on_stage,
+                )
+            else:
+                job.report = run_prove_machine_code(
+                    mc_path=job.mc_path, func=job.func, cfg=self.cfg, repo_root=self.repo_root,
+                    mcu=job.mcu, prop=job.prop, secret=job.secret, on_stage=on_stage,
+                )
             job.status = "done"
         except Exception as e:  # a worker crash must not wedge the job — surface it
             job.error = f"{type(e).__name__}: {e}"

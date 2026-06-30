@@ -28,7 +28,8 @@ proof; `llm_calls=0`) proves the template renders and the program is provable; a
 | loops (`loop_easy`) | addloop, ct_swap, find_in_array | 3/3 ✅ | **1/3** (only addloop ✅) |
 | constant-time | ct_swap | ✅ | ❌ (loop) |
 
-`pytest tests/` → 27 passed. Run the slices with `cloq-agent eval list_easy_four` /
+`pytest tests/` → 125 passed / 5 skipped (in the agent container; the integration-search tests
+skip without a reachable pet-server). Run the slices with `cloq-agent eval list_easy_four` /
 `cloq-agent eval loop_easy`.
 
 Caveat on the numbers: the `_llm` targets are *twins of golds we hold*, and addloop_llm closes by

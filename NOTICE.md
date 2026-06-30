@@ -16,9 +16,6 @@ remains under its own license and copyright terms.
   - Do not reuse, redistribute, or separately incorporate the vendored/referenced
     Picinae/Cloq code without contacting the authors and verifying permission.
 
-<<<<<<< HEAD
-All files outside `vendor/` are Copyright (c) 2026 Ryan Nelson, MIT License (see LICENSE).
-=======
 - coq-lsp / petanque — Emilio J. Gallego Arias and contributors, LGPL-2.1
 - pytanque — LLM4Rocq
 - coqpyt — sr-lab
@@ -38,4 +35,8 @@ All files outside `vendor/` are Copyright (c) 2026 Ryan Nelson, MIT License (see
 All files outside `vendor/` are Copyright (c) 2026 Ryan Nelson and are
 MIT-licensed, unless otherwise stated in an individual file header.
 See `LICENSE`.
->>>>>>> 9365c84 (Rough Draft)
+
+> **Hardware note.** The FPGA/NEORV32 hardware-oracle track is **deferred** (parked,
+> off the critical path); the NEORV32 softcore is still credited above because the
+> timing model is calibrated to it, but no bitstream/board component is on the build,
+> run, or CI path. See `docs/RESULTS.md` for the current (proof-only) trust basis.

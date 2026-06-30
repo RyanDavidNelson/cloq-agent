@@ -1,7 +1,7 @@
 # CLAUDE.md — cloq-agent
 
 > Guidance for Claude Code working in this repo. Read this, then `docs/RESULTS.md`
-> (what works + the ceiling), then `TASKS.md` (the ordered plan).
+> (what works + the ceiling; its "Next" section is the ordered plan).
 
 ## Project
 
@@ -157,4 +157,4 @@ result is **proof-only** (closed form + predicted range). For **held-out** trans
 withhold the gold invariant/proof from the library and few-shot so the metric measures
 capability, not recall. Outputs land under `runs/transfer/<suite>/<target>/`.
 
-See `TASKS.md` for the ordered, acceptance-criteria'd plan.
+See the "Next" section of `docs/RESULTS.md` for the ordered, acceptance-criteria'd plan.

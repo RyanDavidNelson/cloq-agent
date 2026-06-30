@@ -5,13 +5,15 @@ The design rule throughout: **reuse the proof-engine stack wholesale, write only
 
 ```
 cloq-agent/
-├── README.md  pyproject.toml  LICENSE  NOTICE.md  .gitmodules  .gitignore
-├── .github/workflows/  ci.yml  build.yml  nightly.yml
+├── README.md  pyproject.toml  LICENSE  NOTICE.md  .env.example  .gitmodules  .gitignore
+├── .github/workflows/  ci.yml  build.yml  nightly.yml      # GitHub CI
+├── .gitlab-ci.yml                                          # GitLab CI (mirror of the above)
 ├── config/
 ├── src/cloq_agent/{proof,rag,agent,lift}/
+├── api/  gui/                                              # FastAPI service + React SPA
 ├── proofs/{targets,lib}/
-├── eval/{targets}/
-├── fpga/{vivado,firmware,host}/
+├── eval/{targets,transfer,heldout}/
+├── fpga/{vivado,firmware,host}/                            # DEFERRED / parked
 ├── docker/
 ├── docs/
 └── tests/
@@ -26,14 +28,16 @@ cloq-agent/
 | `LICENSE` | MIT — applies to this repo's glue code only. |
 | `NOTICE.md` | Third-party components and their licenses (Picinæ, coq-lsp, NEORV32, CoqHammer, …). |
 | `.gitmodules` | Pins `vendor/picinae` as a git submodule. |
+| `.env.example` | Template for `.env` (git-ignored): `CLOQ_API_KEY`, `CLOQ_MODEL_NAME`, `CLOQ_MODEL_BASE_URL`. Copy to `.env` for the `api`/escalation path. |
 | `.gitignore` | Ignores build artifacts: `.vo`, bitstreams, `rag_store/`, `runs/`. |
-| `.github/workflows/` | CI: `ci.yml` (ruff → pytest → Rocq smoke), `build.yml` (images → GHCR on tags), `nightly.yml` (eval regression gate). |
+| `.github/workflows/` | GitHub CI: `ci.yml` (ruff → pytest → Rocq smoke), `build.yml` (images → GHCR on tags), `nightly.yml` (eval regression gate). |
+| `.gitlab-ci.yml` | GitLab CI: the same `lint → test → smoke → build` stages, ported for GitLab runners (Docker-in-Docker). Kept in sync with the GitHub workflows. |
 
 ## config/ — all runtime knobs in one place
 
 | File | What it is |
 |---|---|
-| `default.yaml` | Petanque host/port, model endpoint + name, RAG settings, agent budgets, FPGA tolerances. Every key is overridable via `CLOQ_*` env vars. |
+| `default.yaml` | Petanque host/port, model endpoint + name, RAG settings, agent budgets (and parked FPGA tolerances). Every key is overridable via `CLOQ_*` env vars. |
 | `local.yaml` | Profile (`--profile local` / `CLOQ_PROFILE=local`): Ollama primary + cloud escalation. Overlaid on `default.yaml`. |
 | `api.yaml` | Profile (`--profile api`): cloud-API primary, escalation off, no Ollama/GPU. Overlaid on `default.yaml`. |
 
@@ -43,9 +47,8 @@ cloq-agent/
 |---|---|
 | `__init__.py` | Version marker. |
 | `config.py` | Loads `default.yaml` / a profile (`local`/`api`, overlaid on default) into typed dataclasses; applies `CLOQ_*` env overrides incl. `CLOQ_API_KEY`. |
-| `.env.example` | Template for `.env` (git-ignored): `CLOQ_API_KEY`, `CLOQ_MODEL_NAME`, `CLOQ_MODEL_BASE_URL`. |
-| `models.py` | LLM client over any OpenAI-compatible endpoint (vLLM/Ollama), with optional escalation to a stronger model for hard goals. |
-| `cli.py` | The `index | prove | prove-c | eval | doctor` commands. |
+| `models.py` | LLM client over any OpenAI-compatible endpoint (vLLM/Ollama/cloud), with optional escalation to a stronger model for hard goals. |
+| `cli.py` | The `index | prove | prove-c | eval | replay | doctor` commands. |
 | `report.py` | Structured prove-c diagnostic: per-stage records (compile/lift/classify/spec-lint/invariant/repair/stored), ceiling labelling, NEORV32 predicted range, rendered to text / JSON / Markdown / HTML. |
 | `pipeline.py` | The prove pipeline, shared so the CLI and API reports never drift: `run_prove_c` (compile C, CLI) and `run_prove_machine_code` (disassemble an ELF/object, API/GUI) over one `lift -> classify -> prove` body; `on_stage` hook for live streaming. |
 
@@ -72,7 +75,7 @@ cloq-agent/
 |---|---|
 | `invariant_synth.py` | Prompts the model to produce a `timing_invs` set from the CFG + retrieved analogues. The one genuinely creative step. |
 | `tactic_repair.py` | Prompts the model for candidate next tactics on a stuck goal. |
-| `orchestrator.py` | The full loop: spec-lint → synthesize → render → hammer → retrieve + repair → FPGA veto → store. Budgeted throughout. |
+| `orchestrator.py` | The full loop: spec-lint → synthesize → render → hammer → retrieve + repair → premise/mutation gates → store. Budgeted throughout. (Keeps an optional, parked `fpga_oracle` veto hook.) |
 
 ### lift/ — code-shape recovery for prompting
 
@@ -86,15 +89,15 @@ cloq-agent/
 
 | File | What it is |
 |---|---|
-| `main.py` | `create_app` + routes: `GET /health`, `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/stream` (SSE), `GET /corpus`. |
-| `service.py` | `JobManager`: runs each upload's prove-c pipeline in a worker thread; collects stage events; lists the stored corpus. |
+| `main.py` | `create_app` + routes: `GET /health`, `POST /jobs` (C source **or** ELF/object + optional `func`/`property`/`secret`), `GET /jobs/{id}`, `GET /jobs/{id}/stream` (SSE), `GET /corpus`. |
+| `service.py` | `JobManager`: routes each upload — `.c`/`.i` → `run_prove_c` (compile with riscv gcc), else → `run_prove_machine_code` (disassemble) — in a worker thread; collects stage events; lists the stored corpus. |
 
 ## gui/ — the web SPA (Vite + React)
 
 | File | What it is |
 |---|---|
 | `src/App.tsx` | Orchestrates upload -> SSE stream -> result; holds health + corpus state. |
-| `src/components/` | `Header` (AutoCloq ASCII hero + tagline), `UploadForm` (MCU dropdown + machine-code upload), `StageProgress` (live stepper + log), `ResultPanel` (proof or first-class diagnostic), `CorpusPanel`. |
+| `src/components/` | `Header` (AutoCloq ASCII hero + tagline), `UploadForm` (MCU dropdown + **C-source-or-binary** upload; C source shows a function-name field and is compiled in-process), `StageProgress` (live stepper + log, adapts to the compile/disassemble intake), `ResultPanel` (proof or first-class diagnostic), `CorpusPanel`. |
 | `src/ascii.ts` | The AutoCloq wordmark (figlet ansi_shadow), rendered white-on-black in the hero. |
 | `src/api.ts` | Same-origin `/api` client incl. the SSE subscription. |
 
@@ -114,15 +117,18 @@ cloq-agent/
 | `targets.yaml` | The target list with gold cycle counts (chacha20 = 13624, vlist_insert_end = 54, …) and secret-param tags. |
 | `targets.py` | Loads a target → `TargetSpec` + CFG description + gold invariant. |
 | `harness.py` | Runs the orchestrator over all targets and tabulates the metrics. |
-| `mutate.py` | Mutation/metamorphic testing: inject a leak, require the proof to break **and** the FPGA to show variance (anti-vacuity). |
+| `mutate.py` | Mutation/metamorphic testing (proof-only now FPGA is parked): corrupt the cycle closed form / inject a leak and require the proof to break (anti-vacuity). |
 | `ablations.py` | Toggles RAG / hammer-first / escalation and re-runs, to reproduce the retrieval finding on your own targets. |
 | `targets/addloop.objdump` | Sample disassembly so the CFG/loop-detection path is exercised end-to-end. |
 
-## fpga/ — the hardware oracle (AMD AUP-ZU3)
+## fpga/ — the hardware oracle (AMD AUP-ZU3) — DEFERRED / parked
+
+> Off the critical path: no dependency in build/run/CI/GUI. Retained as design intent; the live
+> anti-vacuity gates are in-proof (`eval/mutate.py`, `proof/premise_check.py`). See `docs/RESULTS.md`.
 
 | File | What it is |
 |---|---|
-| `README.md` | Oracle design, the PS↔PL split, determinism rules, the three anti-vacuity checks. |
+| `README.md` | Oracle design, the PS↔PL split, determinism rules, the three anti-vacuity checks. *(Parked.)* |
 | `vivado/build_neorv32_zynq.tcl` | Builds the NEORV32-in-PL + Zynq-PS block design → bitstream + `.xsa`. **Verify the part/speed-grade string.** |
 | `firmware/mailbox.h` | AXI register map shared between the A53 host and the NEORV32 core. |
 | `firmware/measure_stub.c` | NEORV32 firmware: per GO pulse, run the target bracketed by `mcycle`/`minstret` reads. |
@@ -137,27 +143,35 @@ cloq-agent/
 | `Dockerfile.rocq` | Rocq 8.20 + coq-lsp + petanque + CoqHammer + Tactician, Picinæ/Cloq prebuilt; launches `pet-server`. |
 | `Dockerfile.agent` | The Python agent image. |
 | `Dockerfile.toolchain` | Pinned RISC-V cross toolchain (gcc 14.2 / binutils 2.44) for the C-intake `compile` stage; records its exact version. |
-| `Dockerfile.api` | Backend API image (toolchain base + Python + `[api,rag]`); serves `uvicorn api.main:app` on :8000. |
+| `Dockerfile.api` | Backend API image: bundles the pinned RISC-V toolchain (so C uploads compile in-process) + Python + `[api]`; serves `uvicorn api.main:app` on :8000. |
 | `Dockerfile.gui` | Builds the SPA (node) and serves it with nginx on :8080; `nginx.conf` reverse-proxies `/api` -> api. |
 | `nginx.conf` | GUI server: static SPA + SSE-friendly `/api` reverse proxy to the api service. |
-| `compose.yaml` | Wires the rocq (petanque) service + agent; the model server stays on the host so the GPU does too. |
+| `compose.yaml` | Two profiles: `api` (rocq + api + gui, cloud model) and `local` (rocq + agent + toolchain + ollama). `rag_store/` + `runs/` are named volumes. |
 
 ## docs/
 
 | File | What it is |
 |---|---|
-| `SPEC.md` | Full project spec: milestones M0–M5, eval metrics, FPGA oracle design, job-requirement mapping. |
+| `SPEC.md` | Full original design spec: milestones M0–M5, eval metrics, FPGA oracle design (FPGA now deferred), job-requirement mapping. (Root `SPEC.md` is a pointer here.) |
+| `RESULTS.md` | The consolidated results write-up: what proves today, the held-out number, and the precise ceiling. **Start here for current state.** |
 | `ARCHITECTURE.md` | The reuse map and the loop, in prose — why each off-the-shelf piece was chosen. |
-| `BRINGUP.md` | The two-track (software ‖ FPGA) bring-up checklist and target attack order. |
+| `BRINGUP.md` | The software bring-up checklist (Track A live; the FPGA Track B is parked). |
+| `results/transfer.md` | The held-out OpenSSL + FreeRTOS transferability study (10/10 easy tier). |
 | `FILEMAP.md` | This file. |
 
 ## tests/
+
+A pytest module per area (`pytest tests/` → 125 passed / 5 skipped in the agent container; the
+integration-search tests skip without a reachable pet-server). Representative modules:
 
 | File | What it is |
 |---|---|
 | `test_cfg.py` | CFG recovery + loop detection on the addloop listing. |
 | `test_store.py` | Vector-store add/query/persistence round-trip. |
 | `test_theorem_builder.py` | Theorem rendering produces a well-formed, parametrized `.v`. |
+| `test_api.py` | API job lifecycle, SSE stream, `/health` (no key), C-vs-binary routing, `/corpus`. |
+| `test_compile.py` | The pinned C → RV32 compile + disassemble front door. |
+| `test_se_find_closes.py` | Held-out search-loop closers (`se_find_eq` / `se_find_ge`) stay green. |
 
 ---
 
@@ -171,4 +185,4 @@ cloq-agent/
 - **CoqHammer** — Czajka & Kaliszyk, JAR 2018. **Tactician** — Blaauwbroek et al. — automation.
 - **Cloq** — Averill. *Formally-Verified, Tight Timing Constraints for Machine Code.* PLDI SRC 2025. — the timing framework.
 - **Picinæ** — the binary-analysis framework Cloq builds on.
-- **NEORV32** — Nolting — the RISC-V softcore used as the hardware oracle.
+- **NEORV32** — Nolting — the RISC-V softcore the timing model is calibrated to (the hardware-oracle track is deferred).

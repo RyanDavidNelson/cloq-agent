@@ -12,10 +12,12 @@ export async function getHealth(): Promise<Health> {
 export async function submitJob(
   file: File,
   mcu: string,
+  func?: string,
 ): Promise<{ job_id: string; status: string }> {
   const fd = new FormData();
   fd.append("file", file, file.name);
   fd.append("mcu", mcu);
+  if (func && func.trim()) fd.append("func", func.trim());
   const r = await fetch(`${BASE}/jobs`, { method: "POST", body: fd });
   if (!r.ok) {
     let detail = `HTTP ${r.status}`;

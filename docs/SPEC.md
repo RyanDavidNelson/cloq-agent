@@ -1,8 +1,18 @@
 # cloq-agent — Automated Timing-Proof Synthesis for Machine Code
 
-**One-line:** An agentic system that synthesizes and machine-checks **Cloq** timing proofs (WCET + constant-time) over **Picinæ**-lifted binaries, using a local LLM + retrieval, and validates every proof against a **real RISC-V softcore on an FPGA** so that no proof is unsound or trivially true.
+**One-line:** An agentic system that synthesizes and machine-checks **Cloq** timing proofs (WCET + constant-time) over **Picinæ**-lifted binaries, using an LLM + retrieval, with the timing model calibrated to the **NEORV32** RISC-V softcore so that no proof is unsound or trivially true.
 
-> Built on `vendor/picinae` (Picinæ, Rocq/Coq) and Cloq's timing layer (`timing/TimingAutomation.v`, `whammer`/`hammer` tactics). Target ISA: RISC-V (RV32IMC) on NEORV32, the same core Cloq validated against.
+> Built on `vendor/picinae` (Picinæ, Rocq/Coq) and Cloq's timing layer (`timing/TimingAutomation.v`, `whammer`/`hammer` tactics). Target ISA: RISC-V (RV32IM + Zicsr/Zicntr) on NEORV32, the same core Cloq validated against.
+
+> **⚠️ Status note — this is the original *design* spec; read it against [`docs/RESULTS.md`](RESULTS.md).**
+> Two things have changed since it was written:
+> 1. **FPGA validation (milestone M3, §4) is DEFERRED / parked** — off the critical path, with no
+>    board dependency in build/run/CI/GUI. Output is **proof-only** (closed form + predicted range);
+>    proofs are sound *relative to* the NEORV32 timing model (a trusted, hardware-unvalidated input).
+>    The empirical "measured == predicted" / dudect checks below describe the *parked* track. In
+>    their place, two in-proof anti-vacuity gates run on every proof (`eval/mutate.py` cycle-form
+>    mutation; `proof/premise_check.py` premise-satisfiability) — see `docs/RESULTS.md` and `CLAUDE.md`.
+> 2. **CI is GitHub Actions + a mirrored GitLab pipeline** (`.gitlab-ci.yml`), not GitLab-only.
 
 ---
 
@@ -57,7 +67,11 @@ Gold labels per target: a known-good proof script, a known invariant set, and a 
 
 ---
 
-## 4. The FPGA oracle — making proofs *grounded* and *non-trivial*
+## 4. The FPGA oracle — making proofs *grounded* and *non-trivial*  *(DEFERRED — parked track)*
+
+> **This section describes the parked FPGA track.** It is retained as design intent. None of it is
+> on the current critical path; the live anti-vacuity guards are the in-proof gates (`eval/mutate.py`,
+> `proof/premise_check.py`), not hardware measurement. See the status note at the top.
 
 A formal timing proof can fail to mean anything in two ways. The FPGA addresses both, alongside in-proof guards.
 
@@ -182,7 +196,7 @@ Run the agent over `eval/targets/`, compare against `eval/gold/`. Metrics:
 - **Local LLM (5090, 32 GB):** Qwen3-Coder-30B (Q4–Q8) or Qwen2.5-Coder-32B as the workhorse — both fit with context headroom; local code-aware embedder for RAG. **Hybrid escalation** to a cloud frontier model only on budget-exceeded hard goals (the cost-minimizing pattern).
 - **Serving:** vLLM or Ollama in a CUDA container; PyTorch for any embedding/eval tooling (matches the job's PyTorch/NumPy/Pandas ask).
 - **FPGA:** NEORV32 RV32IMC + `Zicntr`, caches off, deterministic memory; host bridge over UART/JTAG. (RTOS-capable NEORV32 ≈ 2300 LUTs / 1000 FFs — comfortable on any mid-range board.)
-- **Infra:** Linux, Docker Compose, GitLab CI/CD; vector DB for the proof library.
+- **Infra:** Linux, Docker Compose, CI/CD (GitHub Actions + a mirrored GitLab pipeline); vector DB for the proof library.
 
 ---
 

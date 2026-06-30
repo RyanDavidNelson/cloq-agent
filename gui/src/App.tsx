@@ -38,7 +38,7 @@ export default function App() {
     setError(null);
     setLastTarget(a.file.name.replace(/\.[^.]+$/, ""));
     try {
-      const { job_id } = await submitJob(a.file, a.mcu);
+      const { job_id } = await submitJob(a.file, a.mcu, a.func);
       unsubRef.current = streamJob(job_id, {
         onStage: (s) => setStages((prev) => [...prev, s]),
         onFinal: (f) => {

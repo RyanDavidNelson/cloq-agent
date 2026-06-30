@@ -21,9 +21,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install ruff
-      # `api/` does not exist yet (Phase 2); lint it only once it lands so the job stays green
-      # on a clean clone while honoring the documented `ruff check src eval api` target.
-      - run: ruff check src eval $( [ -d api ] && echo api )
+      - run: ruff check src eval api
 
   pytest:
     runs-on: ubuntu-latest

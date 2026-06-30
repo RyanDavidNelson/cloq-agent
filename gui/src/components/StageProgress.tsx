@@ -1,10 +1,12 @@
 import type { Stage, StageStatus } from "../types";
 
-// The pipeline, in order (disassemble -> lift -> prove -> result). "prove" is the classify/
-// spec-lint/invariant/repair group; "stored" is the corpus write-back.
-const CANON = ["disassemble", "lift", "classify", "spec-lint", "invariant", "repair", "stored"];
+// The pipeline, in order. The first stage depends on the upload: a C source compiles
+// (compile -> lift -> ...), a prebuilt binary disassembles (disassemble -> lift -> ...). The rest
+// is shared: "classify/spec-lint/invariant/repair" is the prove group; "stored" is the write-back.
+const TAIL = ["lift", "classify", "spec-lint", "invariant", "repair", "stored"];
 
 const LABEL: Record<string, string> = {
+  compile: "Compile",
   disassemble: "Disassemble",
   lift: "Lift",
   classify: "Classify",
@@ -33,6 +35,10 @@ export function StageProgress({
   // Last status per stage name wins (e.g. lift may appear twice).
   const byName = new Map<string, Stage>();
   for (const s of stages) byName.set(s.name, s);
+  // First stage is the intake: compile (C source) or disassemble (prebuilt binary). Default to
+  // disassemble until the first event arrives.
+  const intake = byName.has("compile") ? "compile" : "disassemble";
+  const CANON = [intake, ...TAIL];
   const firstUnseen = CANON.find((n) => !byName.has(n));
 
   return (
@@ -71,7 +77,7 @@ export function StageProgress({
       )}
 
       {!running && !done && stages.length === 0 && (
-        <p className="muted">Upload machine code to start the disassemble → lift → prove pipeline.</p>
+        <p className="muted">Upload a C source or a RISC-V binary to start the compile/disassemble → lift → prove pipeline.</p>
       )}
     </div>
   );

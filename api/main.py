@@ -1,14 +1,20 @@
-"""FastAPI surface for cloq-agent: upload a C file, run prove-c in a worker, stream the stages.
+"""FastAPI surface for cloq-agent: upload a C file *or* a prebuilt RISC-V binary, run the prove
+pipeline in a worker, stream the stages.
+
+A `.c`/`.i` upload is compiled with the pinned RISC-V gcc first (the `prove-c` front door); any
+other upload is treated as a RISC-V ELF/object and disassembled directly (no compile step). Both
+converge on the same `lift -> classify -> prove` body, so the report is identical regardless of how
+the bytes arrived.
 
 Endpoints:
   GET  /health             active model backend + profile (never the API key)
-  POST /jobs               multipart C upload + target options -> {job_id} (202, runs in a worker)
+  POST /jobs               multipart upload (C source or ELF/object) + target options -> {job_id} (202)
   GET  /jobs/{id}          status + the structured report
   GET  /jobs/{id}/stream   Server-Sent Events: one message per stage transition, then a final event
   GET  /corpus             solved proofs stored in the RAG corpus
 
-The report a job produces is the exact same `ProveCReport` the CLI builds (both call
-`cloq_agent.pipeline.run_prove_c`), so the API and CLI never drift.
+The report a job produces is the exact same `ProveCReport` the CLI builds (both call into
+`cloq_agent.pipeline`), so the API and CLI never drift.
 """
 from __future__ import annotations
 
@@ -73,9 +79,11 @@ def create_app(cfg: Config | None = None, *, repo_root: Path | None = None,
 
     @app.post("/jobs", status_code=202)
     async def create_job(
-        file: UploadFile = File(..., description="a RISC-V machine-code artifact (ELF / object)"),
+        file: UploadFile = File(..., description="a C source file (.c, compiled with riscv gcc) "
+                                                "or a prebuilt RISC-V ELF/object"),
         mcu: str = Form("neorv32", description="target microcontroller (only neorv32 today)"),
-        func: str | None = Form(None, description="optional symbol to name the program"),
+        func: str | None = Form(None, description="symbol to prove; for C uploads defaults to the "
+                                                  "file stem, for binaries names the program"),
         property: str = Form("wcet", description="wcet | ct"),
         secret: str | None = Form(None, description="secret parameter (for property=ct)"),
     ) -> JSONResponse:

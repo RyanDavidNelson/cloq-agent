@@ -1,7 +1,7 @@
 [project]
 name = "cloq-agent"
 version = "0.1.0"
-description = "Agentic synthesis of Cloq timing proofs over Picinae-lifted binaries, validated on FPGA."
+description = "Agentic synthesis and machine-checking of Cloq timing proofs over Picinae-lifted RISC-V binaries (NEORV32 timing model)."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
