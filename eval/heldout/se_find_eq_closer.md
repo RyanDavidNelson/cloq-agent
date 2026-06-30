@@ -1,20 +1,34 @@
-# se_find_eq bottom-test closer — COMPLETE (all goals discharged in petanque)
+# se_find_eq bottom-test closer — COMPLETE (standalone coqc-Qed `.vo`)
 
-Status: **the held-out se_find_eq search proof CLOSES — every goal discharged through petanque**
-(base case; arm 0; arm 1's found / not-found-contradiction / i+1-continuation / not-found-exit; and
-the `len = 0` guard branch's vacuous-body + guard-taken-postcondition + fallthrough-contradiction).
-This is the first held-out search function the engine closes that it has never seen — generated
-program, emitted decidability, emitted bottom-test `time_of`, body invariant, `destruct len` closer.
+Status: **the held-out se_find_eq search proof is a kernel-checked `.vo`.** A clean `coqc` of
+`proofs/targets/Se_find_eq_gen.v` emits `Se_find_eq_gen.vo` with a real `Qed` (no "Open proofs
+remain"). `Print Assumptions` rests only on the documented trust basis — `functional_extensionality`
+(Picinae's standard axiom) and the NEORV32 latency constants (`T_inst_latency` / `T_data_latency`) —
+no `admit`, no proof-specific axiom. This is the first held-out search function the engine closes
+that it has never seen: generated program, emitted (`cloq_`-namespaced) decidability, emitted
+bottom-test `time_of`, body invariant, `destruct len` not-found-exit closer. Pinned by
+`tests/test_se_find_eq_closes.py`.
 
-CAVEAT (mechanical, not correctness): a standalone `coqc` of the assembled `.v` reports "Open proofs
-remain" because the interactive flow used NUMBERED focus brackets (`3:{ }` / `1:{ }`) that select
-goals by position, and those don't linearize in the same order in a flat `Proof. ... Qed.` The proof
-is valid (petanque discharged all goals); turning it into a coqc-`Qed` script needs the IN/NOT_IN
-sub-goals closed in their natural order (e.g. bullets `-`/`+` instead of numbered focus). That
-restructuring is the only thing between here and a standalone `.vo`.
+What turned "closes in petanque" into a standalone `.vo` (the former CAVEAT, now resolved): the
+interactive flow used NUMBERED focus brackets (`3:{ }` / `1:{ }`) that select goals by position, and
+those do not linearise in a flat `Proof. ... Qed.` Two facts the numbered flow had papered over:
 
-Reproduce: `python eval/heldout/build_se_find_eq.py` -> `docker restart docker-rocq-1` -> drive the
-tactics below via petanque, starting `se_find_eq_timing_gen` -> `goals == 0`.
+* each `repeat (tstep r5_step)` on the `0x1c` body fans into THREE leaves — found-here / bottom-test
+  exit / i+1 continuation — and the `cloq_key_in_array_dec` case-split doubles that into IN and
+  NOT_IN. The fix is one **order-independent** `all: solve [ closer1 | closer2 | closer3 ]` per
+  branch (each closer only fully succeeds on its own leaf, so leaf order is irrelevant), under a
+  curly-brace `{ ... }` focus that isolates each `apply prove_invs` / `destruct_inv` arm. No numbered
+  positional focus survives.
+* the `len = 0` guard-taken path parks two logically-unconstrained `N` metavariables on the shelf
+  (`tstep` introduces them; the immediate-exit path never pins them via an `exists` witness, the way
+  the len<>0 search arm does). They live only in the proof term, never the statement, so a closing
+  `Unshelve. all: exact 0.` discharges them soundly.
+
+Reproduce: `python eval/heldout/build_se_find_eq.py` regenerates the OPEN scaffold (+ compiles the
+program functor); the committed `Se_find_eq_gen.v` carries the closed `Proof. ... Qed.` Compile it
+with `coqc` under the project `_CoqProject` load path (e.g. `make all` in `proofs/`, or the steps in
+`tests/test_se_find_eq_closes.py`). The historical petanque tactic script (NUMBERED focus, kept for
+reference) follows; the live, linearised proof is the `.v` itself.
 
 Key lessons baked in: invariant carries `4*len < 2^32` (no-wrap reductions need it in every arm);
 memory clauses use `arr + 4*j` (plain, matches the emitted template) while the moving pointer keeps

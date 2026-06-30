@@ -84,12 +84,113 @@ match t with (Addr a, s) :: t' => match a with
       (PTR_ALIGN: exists k', arr = 4 * k'),
     satisfies_all lifted_prog (se_find_eq_timing_invs arr key len base_mem) exits ((x',s') :: t).
   Proof.
-    Local Ltac step := tstep r5_step.
+    (* Standalone coqc-Qed structure: a curly-brace focus `{ ... }` handles the FIRST goal
+       (and must fully close it), and each loop-body fan-out is closed by ONE order-independent
+       `all: solve [ closer1 | closer2 | closer3 ]` (a closer only fully succeeds on its own
+       leaf, so leaf order is irrelevant). This replaces the numbered positional focus
+       (`3:{ } / 1:{ }`) that did not linearize in a flat proof. *)
     intros.
-    apply prove_invs.
-    simpl. rewrite ENTRY. unfold entry_addr. now step.
-    intros.
-    eapply startof_prefix in ENTRY; try eassumption.
-    eapply preservation_exec_prog in MDL; try eassumption; [idtac|apply lift_riscv_welltyped].
-    clear - ENTRY PRE MDL. rename t1 into t. rename s1 into s'.
-    destruct_inv 32 PRE.
+    destruct (len =? 0) eqn:LEN0.
+    (* ===================== len = 0 guard branch ===================== *)
+    { apply N.eqb_eq in LEN0. apply prove_invs.
+      (* base 0x0 *)
+      { simpl. rewrite ENTRY. unfold entry_addr. tstep r5_step.
+        now (repeat split; (try assumption); (try reflexivity)). }
+      (* inductive setup *)
+      intros. eapply startof_prefix in ENTRY; try eassumption.
+      eapply preservation_exec_prog in MDL; try eassumption; [idtac|apply lift_riscv_welltyped].
+      clear - ENTRY PRE MDL LEN0. rename t1 into t. rename s1 into s'.
+      destruct_inv 32 PRE.
+      (* 0x0 -> guard-taken exit (len = 0): fallthrough is contradictory, real path exits None *)
+      { destruct PRE as (Mem & A0 & A1 & A2 & LVx & PA & Cyc). repeat (tstep r5_step).
+        all: solve
+          [ exfalso; apply N.eqb_neq in BC; exact (BC LEN0)
+          | right; split;
+            [ intro H; destruct H as (k & Hc & _); rewrite LEN0 in Hc; lia
+            | unfold cloq_time_of_se_find_eq; rewrite LEN0; hammer ] ]. }
+      (* 0x1c vacuous: i < s R_A2 = 0 is impossible *)
+      { destruct PRE as (i & Hlt & rest). exfalso. lia. }
+    }
+    (* ===================== len <> 0 search branch ===================== *)
+    { apply N.eqb_neq in LEN0. apply prove_invs.
+      (* base 0x0 *)
+      { simpl. rewrite ENTRY. unfold entry_addr. tstep r5_step.
+        now (repeat split; (try assumption); (try reflexivity)). }
+      (* inductive setup *)
+      intros. eapply startof_prefix in ENTRY; try eassumption.
+      eapply preservation_exec_prog in MDL; try eassumption; [idtac|apply lift_riscv_welltyped].
+      clear - ENTRY PRE MDL LEN0. rename t1 into t. rename s1 into s'.
+      destruct_inv 32 PRE.
+      (* ARM 0 : 0x0 -> body. guard-taken branch is contradictory (len<>0); body inv at i=0 *)
+      { destruct PRE as (Mem & A0 & A1 & A2 & LV & PA & Cyc). repeat (tstep r5_step).
+        all: solve
+          [ apply N.eqb_eq in BC; contradiction
+          | exists 0; apply N.eqb_neq in BC; repeat split; (try assumption); (try reflexivity);
+            (try lia); (try (intros; lia)); (try (psimpl; lia)); (try hammer) ]. }
+      (* ARM 1 : 0x1c body step. Case-split on whether key is in the array, then close each
+         fan-out (found-here / not-found bound-exit / i+1 continuation) order-independently. *)
+      { destruct PRE as (i & Hlt & LV2 & A4 & A5 & A1eq & A0eq & A2eq & Memeq & NotFound & Cyc).
+        destruct (cloq_key_in_array_dec (s' V_MEM32) arr key len) as [IN | NOT_IN].
+        (* IN: found-here proves Some i; the bound-exit is contradictory; continue at i+1 *)
+        { repeat (tstep r5_step).
+          all: solve
+            [ (* found here (BC: key matches at i): witness i, NotFound pins it as first match *)
+              left; exists i; split;
+              [ assumption
+              | split;
+                [ apply negb_false_iff in BC; now apply N.eqb_eq in BC
+                | split; [ exact NotFound | unfold cloq_time_of_se_find_eq; hammer ] ] ]
+            | (* bottom-test exit while key is still in the array: contradiction *)
+              exfalso; destruct IN as (idx & IL & IE); rewrite Memeq in IE;
+              apply N.eqb_eq in BC0; rewrite N.mod_small in BC0 by lia;
+              destruct (N.lt_ge_cases idx i) as [L|G];
+              [ exact (NotFound idx L IE)
+              | assert (idx = i) by lia; subst idx;
+                apply negb_true_iff in BC; apply N.eqb_neq in BC; exact (BC IE) ]
+            | (* i+1 continuation: re-establish the body invariant one index further *)
+              apply negb_true_iff in BC; apply N.eqb_neq in BC; exists (1 ⊕ i);
+              repeat split; (try reflexivity); (try assumption);
+                (try (apply N.eqb_neq in BC0; psimpl; lia));
+                (try (intros j Hj; destruct (N.lt_ge_cases j i) as [Lj|Gj];
+                      [ now apply (NotFound j Lj)
+                      | assert (j = i) as Ej by (psimpl in Hj; lia); subst j; exact BC ]));
+              apply N.eqb_neq in BC0; rewrite (N.mod_small (1 + i)) in BC0 by lia;
+              rewrite (N.mod_small (1 + i)) by lia;
+              assert (len =? 1 + i = false) as Hf by (now apply N.eqb_neq); rewrite ?Hf; hammer ]. }
+        (* NOT_IN: the found-here position is contradictory; continue at i+1; the bottom-test
+           exit is the REAL not-found exit (the i = len-1 dual) proving None *)
+        { repeat (tstep r5_step).
+          all: solve
+            [ (* key matches at i contradicts NOT_IN *)
+              exfalso; apply NOT_IN; exists i; split;
+              [ assumption | rewrite Memeq; apply negb_false_iff in BC; now apply N.eqb_eq in BC ]
+            | (* i+1 continuation (same as the IN continuation) *)
+              apply negb_true_iff in BC; apply N.eqb_neq in BC; exists (1 ⊕ i);
+              repeat split; (try reflexivity); (try assumption);
+                (try (apply N.eqb_neq in BC0; psimpl; lia));
+                (try (intros j Hj; destruct (N.lt_ge_cases j i) as [Lj|Gj];
+                      [ now apply (NotFound j Lj)
+                      | assert (j = i) as Ej by (psimpl in Hj; lia); subst j; exact BC ]));
+              apply N.eqb_neq in BC0; rewrite (N.mod_small (1 + i)) in BC0 by lia;
+              rewrite (N.mod_small (1 + i)) by lia;
+              assert (len =? 1 + i = false) as Hf by (now apply N.eqb_neq); rewrite ?Hf; hammer
+            | (* not-found exit at i = len-1: ~exists from NOT_IN, time None via len = 1+i *)
+              right; split;
+              [ intro H; apply NOT_IN; rewrite Memeq; exact H
+              | assert (len = 1 + i) as Hlen by
+                  (apply N.eqb_eq in BC0; rewrite (N.mod_small (1 + i)) in BC0 by lia; exact BC0);
+                unfold cloq_time_of_se_find_eq; destruct len as [|p] eqn:EL;
+                [ lia | rewrite Hlen; hammer ] ] ]. }
+      }
+    }
+    (* The symbolic stepping of the len=0 guard-taken path parks two logically-unconstrained
+       N metavariables on the shelf (the len<>0 search arm pins its analogues via the explicit
+       `exists` witnesses; the immediate-exit path never introduces such a witness). They occur
+       only inside the proof term, never in the statement, so any value discharges them. *)
+    Unshelve. all: exact 0.
+  Qed.
+
+End se_find_eq_timing_gen_Proof.
+
+Module se_find_eq_timing_gen_CPU := NEORV32 NEORV32BaseConfig.
+Module se_find_eq_timing_gen_Concrete := se_find_eq_timing_gen_Proof se_find_eq_timing_gen_CPU.
