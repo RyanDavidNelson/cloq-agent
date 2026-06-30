@@ -67,7 +67,7 @@ Module se_find_eq_timing_gen_Proof (cpu : RVCPUTimingBehavior).
 Definition se_find_eq_timing_invs (arr key len : N) (base_mem : memory) (t:trace) : option Prop :=
 match t with (Addr a, s) :: t' => match a with
 | 0x0 => Some (s V_MEM32 = base_mem /\ s R_A0 = arr /\ s R_A1 = key /\ s R_A2 = len /\ (4 * len < 2^32) /\ (exists k', arr = 4 * k') /\ cycle_count_of_trace t' = 0)
-| 0x1c => Some (exists i, i < len /\ s R_A4 = i /\ s R_A5 = arr ⊕ (4 * i) /\ s R_A1 = key /\ s R_A0 = len /\ s R_A2 = len /\ s V_MEM32 = base_mem /\ (forall j, j < i -> base_mem Ⓓ[arr ⊕ (4 * j)] <> key) /\ cycle_count_of_trace t' = taddi + taddi + tfbeq + taddi + tjal + i * (tlw + taddi + ttbne + taddi + tfbeq))
+| 0x1c => Some (exists i, i < len /\ 4 * len < 2^32 /\ s R_A4 = i /\ s R_A5 = arr ⊕ (4 * i) /\ s R_A1 = key /\ s R_A0 = len /\ s R_A2 = len /\ s V_MEM32 = base_mem /\ (forall j, j < i -> base_mem Ⓓ[arr + (4 * j)] <> key) /\ cycle_count_of_trace t' = taddi + taddi + tfbeq + taddi + tjal + i * (tlw + taddi + ttbne + taddi + tfbeq))
 | 0x2c => Some (cloq_timing_postcondition base_mem arr key len t)
 | 0x30 => Some (cloq_timing_postcondition base_mem arr key len t)
 | _ => None end | _ => None end.

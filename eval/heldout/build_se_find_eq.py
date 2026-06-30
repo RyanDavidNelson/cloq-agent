@@ -104,9 +104,14 @@ def main() -> None:
                         + time_of_bottom_test(P + "time_of_se_find_eq", "len", bt) + "\n\n"
                         + timing_postcondition_block(shape, P + "time_of_se_find_eq", P))
 
-    body_inv = ("(exists i, i < len /\\ s R_A4 = i /\\ s R_A5 = arr ⊕ (4 * i) /\\ s R_A1 = key /\\ "
-                "s R_A0 = len /\\ s R_A2 = len /\\ s V_MEM32 = base_mem /\\ "
-                "(forall j, j < i -> base_mem Ⓓ[arr ⊕ (4 * j)] <> key) /\\ "
+    # The moving-pointer tie keeps ⊕ (the real modular machine value of a5); the MEMORY clause uses
+    # plain + to match the emitted template's `arr + 4*j` (the loads bridge ⊕->+ via mod_small).
+    # `4 * len < 2^32` (LEN_VALID) must live in the loop invariant: the modular no-wrap reductions
+    # (1 (+) i -> 1 + i, arr (+) 4*i bridges) need it in every arm, and the prelude clears the
+    # theorem's copy. find_in_array carries it in its loop-head arm for the same reason.
+    body_inv = ("(exists i, i < len /\\ 4 * len < 2^32 /\\ s R_A4 = i /\\ s R_A5 = arr ⊕ (4 * i) "
+                "/\\ s R_A1 = key /\\ s R_A0 = len /\\ s R_A2 = len /\\ s V_MEM32 = base_mem /\\ "
+                "(forall j, j < i -> base_mem Ⓓ[arr + (4 * j)] <> key) /\\ "
                 f"cycle_count_of_trace t' = {bt.pro} + i * ({bt.body_cont}))")
     entry_inv = ("(s V_MEM32 = base_mem /\\ s R_A0 = arr /\\ s R_A1 = key /\\ s R_A2 = len /\\ "
                  "(4 * len < 2^32) /\\ (exists k', arr = 4 * k') /\\ cycle_count_of_trace t' = 0)")
