@@ -45,8 +45,10 @@ class LLM:
         model = self.cfg.escalation.name if use_esc else self.cfg.name
         # Some models (e.g. Claude Opus 4.8) reject `temperature` entirely. `cfg.temperature = None`
         # marks such a model: omit the param regardless of any caller override, so the same client
-        # works for Ollama (which wants it) and those models (which forbid it).
-        temp = None if self.cfg.temperature is None else (
+        # works for Ollama (which wants it) and those models (which forbid it). The escalation model
+        # is one such model in the shipped `local` profile (claude-opus-4-8), so omit it whenever we
+        # escalate — the primary's temperature must not leak onto a model that forbids the param.
+        temp = None if (use_esc or self.cfg.temperature is None) else (
             self.cfg.temperature if temperature is None else temperature)
         kwargs = {
             "model": model,

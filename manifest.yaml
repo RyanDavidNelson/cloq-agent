@@ -1,0 +1,164 @@
+# cloq-agent held-out generalization test set -- manifest.
+#
+# `expected: prove`   -> should close once the named phase lands.
+# `expected: ceiling` -> must STAY at the ceiling (fail-fast diagnostic).
+# `unblocked_by`      -> which phase of the discharge work this measures.
+# `premises`          -> well-formedness hypotheses the proof will assume; each
+#                        ASSUMED premise must also pass the satisfiability gate
+#                        (exists a state/memory satisfying it) now that there is
+#                        no FPGA oracle -- otherwise a false premise => vacuous.
+# Registers: ilp32 ABI, integer args in a0,a1,a2,... (a0=R_A0, ...).
+
+# ----------------------------------------------------------------- Tier A: controls
+- func: sl_sum3
+  file: tierA_controls.c
+  kind: wcet
+  expected: prove
+  unblocked_by: none            # already works (straight-line)
+  class: straight-line
+  params: [["x","N","R_A0"], ["y","N","R_A1"], ["z","N","R_A2"]]
+  exercises: [regression-guard]
+
+- func: cl_countdown
+  file: tierA_controls.c
+  kind: wcet
+  expected: prove
+  unblocked_by: none            # already works (counter loop)
+  class: counter-loop
+  params: [["n","N","R_A0"]]
+  premises: ["N_VALID: n < 2^32"]
+  exercises: [counter-loop-generalizes-off-addloop]
+
+# --------------------------------------------------- Tier B: array/pointer (Phase 1)
+- func: ap_sum_u32
+  file: tierB_array_ptr.c
+  kind: wcet
+  expected: prove
+  unblocked_by: phase1
+  class: array/pointer loop
+  params: [["a","N","R_A0"], ["len","N","R_A1"]]
+  premises: ["LEN_VALID: 4*len < 2^32", "PTR_ALIGN: exists k, a = 4*k"]
+  exercises: [explicit-witness, canonical-conjunct-order, word-stride]
+
+- func: ap_sum_u8
+  file: tierB_array_ptr.c
+  kind: wcet
+  expected: prove
+  unblocked_by: phase1
+  class: array/pointer loop
+  params: [["a","N","R_A0"], ["len","N","R_A1"]]
+  premises: ["LEN_VALID: len < 2^32"]
+  exercises: [byte-stride, stride-generalization]
+
+- func: ap_scale_inplace
+  file: tierB_array_ptr.c
+  kind: wcet
+  expected: prove
+  unblocked_by: phase1
+  class: array/pointer loop      # single-region store -> NOT aliasing
+  params: [["a","N","R_A0"], ["len","N","R_A1"], ["k","N","R_A2"]]
+  premises: ["LEN_VALID: 4*len < 2^32", "PTR_ALIGN: exists j, a = 4*j"]
+  exercises: [store-in-loop-is-not-aliasing, tmul-in-model]
+
+- func: ap_dot2
+  file: tierB_array_ptr.c
+  kind: wcet
+  expected: prove
+  unblocked_by: phase1
+  class: array/pointer loop
+  params: [["a","N","R_A0"], ["b","N","R_A1"], ["len","N","R_A2"]]
+  premises: ["LEN_VALID: 4*len < 2^32",
+             "ALIGN_A: exists j, a = 4*j", "ALIGN_B: exists k, b = 4*k"]
+  exercises: [two-base-pointers, read-only-no-aliasing]
+
+- func: ap_ptr_walk
+  file: tierB_array_ptr.c
+  kind: wcet
+  expected: prove
+  unblocked_by: phase1
+  class: array/pointer loop
+  params: [["p","N","R_A0"], ["count","N","R_A1"]]
+  premises: ["CNT_VALID: 4*count < 2^32", "PTR_ALIGN: exists k, p = 4*k"]
+  exercises: [pointer-increment-induction]
+
+- func: ct_cond_not
+  file: tierB_array_ptr.c
+  kind: ct
+  expected: prove
+  unblocked_by: phase1
+  class: array/pointer loop
+  params: [["a","N","R_A0"], ["len","N","R_A1"], ["mask","N","R_A2"]]
+  secret_param: mask
+  premises: ["LEN_VALID: 4*len < 2^32", "PTR_ALIGN: exists k, a = 4*k"]
+  exercises: [ct-closed-form-secret-independent, spec_lint-ct]
+
+# --------------------------------------------------------- Tier C: search (Phase 2)
+- func: se_find_ge
+  file: tierC_search.c
+  kind: wcet
+  expected: prove
+  unblocked_by: phase2
+  class: search early-exit
+  params: [["a","N","R_A0"], ["len","N","R_A1"], ["threshold","N","R_A2"]]
+  premises: ["LEN_VALID: 4*len < 2^32", "PTR_ALIGN: exists k, a = 4*k"]
+  exercises: [dec-template, predicate-ge]
+
+- func: se_first_zero_u8
+  file: tierC_search.c
+  kind: wcet
+  expected: prove
+  unblocked_by: phase2
+  class: search early-exit
+  params: [["p","N","R_A0"], ["len","N","R_A1"]]
+  premises: ["LEN_VALID: len < 2^32"]
+  exercises: [dec-template, byte-width, predicate-eq-zero]
+
+- func: se_find_eq
+  file: tierC_search.c
+  kind: wcet
+  expected: prove
+  unblocked_by: phase2
+  class: search early-exit
+  params: [["a","N","R_A0"], ["len","N","R_A1"], ["key","N","R_A2"]]
+  premises: ["LEN_VALID: 4*len < 2^32", "PTR_ALIGN: exists k, a = 4*k"]
+  exercises: [dec-template, recall-vs-synthesis-control]   # ablate find_in_array gold
+
+# ------------------------------------------------------- Tier D: aliasing (Phase 3)
+- func: al_swap_a
+  file: tierD_aliasing.c
+  kind: wcet
+  expected: prove
+  unblocked_by: phase3
+  class: memory-aliasing branch
+  params: [["p","N","R_A0"], ["q","N","R_A1"]]
+  premises: ["NVL: create_noverlaps (memory_regions p q)"]
+  exercises: [memory_regions-emit, noverlaps-discharge, premise-satisfiability-gate]
+
+- func: al_unlink
+  file: tierD_aliasing.c
+  kind: wcet
+  expected: prove
+  unblocked_by: phase3
+  class: memory-aliasing branch
+  params: [["n","N","R_A0"]]
+  premises: ["NVL: create_noverlaps (memory_regions n (n->prev) (n->next))"]
+  exercises: [dynamic-region-addresses, multi-field-struct, premise-satisfiability-gate]
+
+# --------------------------------------------------- Tier E: negative (must stay ceiling)
+- func: neg_matmul_trace
+  file: tierE_negative.c
+  kind: wcet
+  expected: ceiling
+  unblocked_by: none
+  class: unsupported control flow
+  params: [["m","N","R_A0"], ["n","N","R_A1"]]
+  exercises: [classifier-walls-nested-loops, fail-fast-no-spin]
+
+- func: neg_cyclic_find
+  file: tierE_negative.c
+  kind: wcet
+  expected: ceiling
+  unblocked_by: none
+  class: search early-exit        # or unsupported; must NOT template as array
+  params: [["head","N","R_A0"], ["key","N","R_A1"], ["guard","N","R_A2"]]
+  exercises: [array-template-must-not-fire-on-list, cyclic-open-problem]
