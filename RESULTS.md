@@ -9,12 +9,14 @@ diagnostic naming the ceiling class it hit.
 This is the per-target run log for the manifest test set; the project-level capability
 write-up is `docs/RESULTS.md`.
 
-> **See also the [Frontier-model + skeleton-synthesis experiment](#frontier-model--skeleton-synthesis-experiment)
-> at the bottom.** After the initial local-only run, the loop classes were re-run with the
-> agent's skeleton-synthesis path wired in and invariant synthesis escalated to a frontier
-> model (Claude Opus 4.8). Headline: that **solves invariant synthesis** for the loop class
-> (the local model could never emit a type-checking invariant; Opus does), moving the wall
-> from synthesis to proof *discharge*. No loop target reaches Qed yet.
+> **UPDATE (2026-06-30) — the loop class now closes end-to-end.** After the discharge
+> robustness work (`solve_timing_loop`, Phase 1/1b) AND a synthesis-scaffold correctness fix
+> (the invariant match bound `a` shadowed a *parameter* named `a`, silently corrupting every
+> `ap_*` invariant — now a non-colliding `pc`), the array/pointer class was re-run through the
+> skeleton-synthesis path with Claude Opus 4.8. **5 of 6 Tier-B array/pointer functions now
+> reach Qed end-to-end** (LLM writes the invariant, Rocq checks it) — including the
+> constant-time `ct_cond_not`. See the [end-to-end run](#frontier-model--skeleton-synthesis-experiment)
+> at the bottom. Search loops (Tier C) still need the Phase-2 decidability case-split.
 
 ## How these were produced
 
@@ -38,27 +40,30 @@ write-up is `docs/RESULTS.md`.
 |---|----------|------|----------------|----------|------------------|------------|--------------------|
 | 1 | `sl_sum3` | A | straight-line | wcet | prove | ✅ **PROVED** | `cycle ≤ tadd + tadd` (= 4) |
 | 2 | `cl_countdown` | A | straight-line † | wcet | prove | ✅ **PROVED** † | `cycle ≤ 0` (loop optimized away) |
-| 3 | `ap_sum_u32` | B | array/pointer loop | wcet | prove | ❌ ceiling | not closed (synthesis) |
-| 4 | `ap_sum_u8` | B | array/pointer loop | wcet | prove | ❌ ceiling | not closed (synthesis) |
-| 5 | `ap_scale_inplace` | B | array/pointer loop | wcet | prove | ❌ ceiling | not closed (synthesis) |
-| 6 | `ap_dot2` | B | array/pointer loop | wcet | prove | ❌ ceiling | not closed (synthesis) |
-| 7 | `ap_ptr_walk` | B | array/pointer loop | wcet | prove | ❌ ceiling | not closed (synthesis) |
-| 8 | `ct_cond_not` | B | array/pointer loop | **ct** | prove | ❌ ceiling | not closed (synthesis) |
-| 9 | `se_find_ge` | C | search early-exit | wcet | prove | ❌ ceiling | not closed (synthesis) |
-| 10 | `se_first_zero_u8` | C | search early-exit | wcet | prove | ❌ ceiling | not closed (synthesis) |
-| 11 | `se_find_eq` | C | search early-exit | wcet | prove | ❌ ceiling | not closed (synthesis) |
+| 3 | `ap_sum_u32` | B | array/pointer loop | wcet | prove | ✅ **PROVED** (LLM) | `pre + (len-1)·body + tail`, `body = tlw+taddi+tadd+ttbne` |
+| 4 | `ap_sum_u8` | B | array/pointer loop | wcet | prove | ❌ synthesis | discharge OK; model adds a spurious `PTR_ALIGN`/extra arm (byte stride has no alignment) |
+| 5 | `ap_scale_inplace` | B | array/pointer loop | wcet | prove | ✅ **PROVED** (LLM) | store-in-loop closed form in `len` (`tmul` per iter) |
+| 6 | `ap_dot2` | B | array/pointer loop | wcet | prove | ✅ **PROVED** (LLM) | two-pointer closed form in `len` (`tlw+tlw+tmul` per iter) |
+| 7 | `ap_ptr_walk` | B | array/pointer loop | wcet | prove | ✅ **PROVED** (LLM) | pointer-increment closed form in `count` |
+| 8 | `ct_cond_not` | B | array/pointer loop | **ct** | prove | ✅ **PROVED** (LLM) | closed form in `len`, **secret `mask`-independent** (spec_lint-enforced) |
+| 9 | `se_find_ge` | C | search early-exit | wcet | prove | ❌ ceiling (Phase 2) | needs the emitted decidability case-split (generic loop closer has no `destruct … _dec`) |
+| 10 | `se_first_zero_u8` | C | search early-exit | wcet | prove | ❌ ceiling (Phase 2) | search decidability case-split (byte-width predicate) |
+| 11 | `se_find_eq` | C | search early-exit | wcet | prove | ❌ ceiling (Phase 2) | search decidability case-split |
 | 12 | `al_swap_a` | D | straight-line ‡ | wcet | prove | ✅ **PROVED** ‡ | `cycle ≤ 2·tlw + 2·tsw` |
 | 13 | `al_unlink` | D | straight-line ‡ | wcet | prove | ✅ **PROVED** ‡ | `cycle ≤ 2·tlw + 2·tsw` |
 | 14 | `neg_matmul_trace` | E | unsupported control flow | wcet | **ceiling** | ✅ ceiling (correct) | — |
 | 15 | `neg_cyclic_find` | E | search early-exit | wcet | **ceiling** | ✅ ceiling (correct) | — |
 
-**Score:** 4/13 of the `expected: prove` targets close; both `expected: ceiling` targets
-correctly stay at the ceiling (a PROVED there would have been a soundness alarm). The four
-that close are all **deterministic, no-LLM** (straight-line). Every loop class (Tier B/C)
-failed — and, importantly, failed **before proof search even ran** (`iters=0`): the LLM
-invariant-synthesis path is currently mis-wired for C-intake loops (it runs in *freeform*
-mode and never typechecks), not blocked at the discharge step. See the Tier B root-cause
-note for the exact gap and the fix.
+**Score:** **9/13** of the `expected: prove` targets close (was 4/13); both `expected: ceiling`
+targets correctly stay at the ceiling. The four straight-line/Tier-D targets close
+**deterministically (no LLM)**; the **five array/pointer loops** (`ap_sum_u32`,
+`ap_scale_inplace`, `ap_dot2`, `ap_ptr_walk`, `ct_cond_not`) now close **end-to-end with the
+LLM** — Claude Opus 4.8 writes the `exists`-index invariant under the CFG skeleton, and the
+generic `solve_timing_loop` discharges it to Qed. The remaining gaps are honest and specific:
+`ap_sum_u8` fails on *synthesis compliance* (the model over-copies a `PTR_ALIGN` premise a
+byte-stride loop doesn't have, and annotates a spurious pass-through arm — discharge itself is
+fine), and the three Tier-C search loops need the Phase-2 decidability case-split, which the
+generic loop closer does not emit.
 
 Two honest caveats are flagged in the table and detailed below:
 - **†** `cl_countdown` proved, but `-O2` collapsed the counter loop to a single `ret`, so
@@ -348,6 +353,32 @@ cloq-agent prove-c tierE_negative.c --func neg_matmul_trace        # must stay c
 ---
 
 ## Frontier-model + skeleton-synthesis experiment
+
+> **RESOLVED (2026-06-30): the loop class now reaches Qed end-to-end.** The two blockers this
+> section originally identified — (1) discharge residuals on the synthesized invariant and (2)
+> the not-yet-built witness/exit machinery — are fixed. Re-running the Tier-B array/pointer set
+> through the skeleton path with Opus 4.8 as the primary model (`api` profile) now yields **5/6
+> at Qed**: `ap_sum_u32`, `ap_scale_inplace`, `ap_dot2`, `ap_ptr_walk`, and the constant-time
+> `ct_cond_not`. Most close on the **first invariant proposal with zero tactic-repair calls**
+> (`llm_calls=1`) — Opus writes the invariant, `solve_timing_loop` closes it. What changed:
+> - **Discharge (Phase 1/1b, `intake.solve_timing_loop`):** per-exit exact posts, `is_var`-guarded
+>   dual-position index witness (strict `i<len` → exit at `len-1`), branch-cost `if` reduction
+>   under a normalized modulus, a nested-`exists` (alignment) closer, and a `shiftl`/mul-order
+>   normalizer. Closes ct_swap, addloop, AND the held-out synthesized invariants.
+> - **Synthesis scaffold correctness (`cfg._render_definition`):** the match bound the trace
+>   address as `a`, which **shadowed** a parameter named `a` (every `ap_*` target). `s R_A0 = a`
+>   then meant "= the address", not the array base — a *silently type-checking but wrong*
+>   invariant that no discharge could close. Fixed to a fresh non-colliding `pc`. **This one bug
+>   was the difference between 0/6 and 5/6.**
+> - **Synthesis robustness (`invariant_synth._splice_skeleton`):** accept a superset of the
+>   required arms (drop a spurious model-added pass-through arm) instead of rejecting outright.
+> - **Guidance:** the skeleton hole hints now tell the model to carry the entry hypotheses the
+>   inductive step clears (register ties + no-wrap bound), use a strict bottom-test bound, and
+>   exclude the ret's `tjalr` from the exit cost.
+>
+> Remaining: `ap_sum_u8` (byte stride) fails on synthesis *compliance* only (model over-copies a
+> `PTR_ALIGN` premise it doesn't have); Tier-C search loops still need the Phase-2 decidability
+> case-split. The accounting table at the very bottom is superseded by this note.
 
 The initial loop-class failures above were partly a **mis-wiring**, not a hard limit. This
 section re-runs the array/pointer class with the agent's good machinery actually engaged, and

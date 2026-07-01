@@ -170,10 +170,14 @@ def _splice_skeleton(plan: SkeletonPlan, model_text: str) -> str | None:
     """
     arms = _extract_arms(model_text)
     expected = set(plan.hole_addrs) | set(plan.exit_addrs)
-    if set(arms) != expected:
+    # The model must cover every invariant point; EXTRA arms (a pass-through address the model chose
+    # to annotate, e.g. the zero-return `addi a0,0` block) are harmless — `fill()` re-renders the
+    # scaffold from ONLY our hole/exit addresses, so a superset is dropped, not trusted. Requiring an
+    # exact set rejected otherwise-correct invariants over a spurious extra arm.
+    if not expected <= set(arms):
         log.warning(
-            "skeleton rejected: model arm addresses %s != invariant points %s",
-            sorted(hex(a) for a in arms), sorted(hex(a) for a in expected),
+            "skeleton rejected: model arms %s miss invariant points %s",
+            sorted(hex(a) for a in arms), sorted(hex(a) for a in (expected - set(arms))),
         )
         return None
     for a in plan.exit_addrs:

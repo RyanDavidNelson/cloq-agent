@@ -396,6 +396,32 @@ find_in_array_llm:
   objdump: targets/find_in_array.objdump
   postcondition: "timing_postcondition base_mem arr key len t"
 
+ap_sum_u32:
+  # Held-out array/pointer loop: sum of a uint32 array (-O2). This is the discharge target that
+  # forced the generic `solve_timing_loop` to stop hard-coding three conventions the GOLD proofs
+  # happened to share (see docs/RESULTS.md): (1) the -O2 `beq a1,zero` guard gives TWO exits with
+  # different exact costs; (2) the Opus-synthesized invariant is 1-indexed / strict (`i < len`),
+  # so the exit lands at `len-1`, not `len`; (3) the branch-cost `if` is emitted with a modulus
+  # (`4294967296`) that differs syntactically from the loop-guard boolean's (`2^32`). The gold
+  # invariant is the FROZEN Opus fixture (eval/heldout/ap_sum_u32_inv.v), withheld from the
+  # library/few-shot — the test measures DISCHARGE of a synthesized invariant, not recall.
+  kind: wcet
+  description: "Held-out uint32 array-sum loop (-O2, two exits); array/pointer discharge of a synthesized invariant."
+  requires: ["NEORV32", "RISCVTiming", "ap_sum_u32_lifted"]
+  lifted_program: lifted_prog
+  entry_addr: 0x0
+  exit_point: exits
+  theorem_name: ap_sum_u32_timing_gen
+  program_module: Program_ap_sum_u32
+  auto_module: ap_sum_u32Auto
+  # a0 = arr (base pointer), a1 = len. The moving pointer is R_A5 (`addi a5,a0,0`), NOT ct_swap's R_A2.
+  params: [["arr", "N", "R_A0"], ["len", "N", "R_A1"]]
+  entry_hyps:
+    - ["LEN_VALID", "4 * len < 2^32"]
+    - ["PTR_ALIGN", "exists k, arr = 4 * k"]
+  gold_invariant: heldout/ap_sum_u32_inv.v
+  gold_cycles: null
+
 # Named eval groups (resolved by `cloq-agent eval <group>`); not targets themselves.
 groups:
   list_easy_four:

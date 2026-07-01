@@ -764,9 +764,17 @@ def _render_definition(inv_name: str, params: list[tuple[str, ...]], arms: list[
     binders = " ".join(f"({p[0]} : {p[1]})" for p in params)
     binders = f"{binders} " if binders else ""
     arm_lines = "\n".join(f"| 0x{a:x} => Some ({body})" for a, body in sorted(arms))
+    # The match binds the trace's current address; it MUST NOT shadow an invariant parameter (a
+    # target whose pointer arg is literally named `a` — e.g. ap_sum_u32 — otherwise `s R_A0 = a`
+    # inside the arm silently means "= the address", not the array base, and the invariant is
+    # semantically wrong while still type-checking). Pick a fresh name disjoint from the params.
+    pnames = {p[0] for p in params}
+    addr = "pc"
+    while addr in pnames:
+        addr += "_"
     return (
         f"Definition {inv_name} {binders}(t:trace) :=\n"
-        f"match t with (Addr a, s) :: t' => match a with\n"
+        f"match t with (Addr {addr}, s) :: t' => match {addr} with\n"
         f"{arm_lines}\n"
         f"| _ => None\n"
         f"end | _ => None end."

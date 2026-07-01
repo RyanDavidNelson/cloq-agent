@@ -70,7 +70,7 @@ number stays at the easy tier.
 |---|---|---|---|
 | **straight-line** (constant cycle count) | vListInitialise* | **good (3/3)** | invariant is trivial (entry `cycle=0` + pinned exit); generic `try_structured` driver discharges it |
 | **pure counter loop** | addloop | **okay (1/1, via recall)** | timing derived exactly; discharged by reusing addloop's gold script |
-| **array/pointer loop (no early exit)** | ct_swap | **no** | needs an `exists`-index invariant + `handle_ex; exists (1+i)` witness; synthesis emits a pointer-diff index and no generic discharge supplies the witness |
+| **array/pointer loop (no early exit)** | ct_swap, **ap_sum_u32** | **discharge ✅** | generic `solve_timing_loop` closes the `exists`-index invariant to Qed — for the gold ct_swap AND the **held-out Opus-synthesized** ap_sum_u32 (Phase 1b). Open part is synthesis emitting the index invariant, not discharge |
 | **search loop (data-dependent early exit)** | find_in_array, find_in_list | **no** | WCET-of-search proves a *found/not-found disjunction*, which forces a program-specific decidability case-split (`key_in_array_dec`, `key_in_linked_list_dec`) |
 | **memory-aliasing branch** | uxListRemove | **no** | needs `noverlaps`/`getmem_noverlap` aliasing reasoning |
 
@@ -172,6 +172,49 @@ timing, not vacuously true.
 
 The remaining ct_swap gap is **synthesis** producing that `exists`-index invariant; discharge no
 longer blocks it.
+
+## Phase 1b — discharge absorbs a *synthesized* array/pointer invariant (ap_sum_u32)
+
+Phase 1 closed ct_swap given the **gold** invariant. That invariant, though, happened to share
+three conventions with addloop that the closer had silently baked in. A held-out target —
+`ap_sum_u32` (sum a `uint32` array, `-O2`), with the invariant taken from the **frozen
+Opus-4.8 synthesis** (`eval/heldout/ap_sum_u32_inv.v`, never regenerated) — violates all three and
+exposed them. Each is now **derived from the goal/CFG**, not templated onto the invariant arm (which
+stays free-form, preserving proof reuse and the model's real `tfbne`-vs-`ttbne` timing reasoning):
+
+1. **Two exact-cost exits.** `-O2` emits a `beq a1,zero` zero-trip guard, so there are two exits
+   (`0x24` normal fall-through, `0x2c` guarded) with *different* exact cycle costs. A single shared
+   `cycle ≤ Σ` bound is unprovable at the zero-trip arm; the fixture carries a per-exit `=`
+   postcondition (`None => match len with 0 => … | _ => …` shape), and the closer discharges both.
+2. **Index convention.** The synthesized invariant is 1-indexed / strict (`i < len`), so the loop
+   exits at `len-1`, not ct_swap's `index = len`. The witness selector now (a) supplies the loop
+   index **before** `handle_ex`'s blind `eexists` when the `exists` is outermost (ap_sum) and after
+   it when the `exists` is a nested conjunct (ct_swap), and (b) keys on `is_var`-guarded `?i < _`
+   **or** `?i <= _`, so the strict bound matches without catching `4*len < 2^32`. The exit arm adds
+   `replace i with (n-1)` alongside the existing `replace i with n`.
+3. **Branch-cost modulus mismatch.** After `hammer` unfolds `cycle_count_of_trace`, the branch cost
+   surfaces as `if negb ((… ) mod 4294967296 =? …) then ttbne else tfbne`, but the loop-guard
+   boolean `BC` carries the *un-evaluated* `mod 2^32`. `change 4294967296 with (2 ^ 32)` unifies them
+   so `rewrite BC` reduces the `if` to the taken/fall-through cost; the (now linear) cycle equation
+   then closes by `lia`.
+
+Result (live pet-server, no LLM): the **same** `solve_timing_loop` closes addloop, ct_swap, **and
+the held-out ap_sum_u32** to Qed. Pinned by
+`tests/test_discharge_robustness.py::test_synthesized_array_loop_closes_via_generic_discharge`
+(`ap_sum_u32` in `eval/targets.yaml`, gold invariant = the frozen fixture); ct_swap/addloop
+regressions and `tests/test_replay_harness.py` stay green (12 passed against the rocq container).
+The array/pointer end-to-end gap is now purely **synthesis** emitting the `exists`-index invariant.
+
+**End-to-end with the LLM (2026-06-30, `RESULTS.md` manifest run).** With Opus 4.8 driving
+skeleton synthesis AND the discharge above, **5 of 6 Tier-B array/pointer functions reach Qed
+end-to-end** — the model writes the `exists`-index invariant, Rocq checks it (`ap_sum_u32`,
+`ap_scale_inplace`, `ap_dot2`, `ap_ptr_walk`, constant-time `ct_cond_not`), most on the first
+proposal with zero tactic-repair. Two synthesis-side fixes made this land: (1)
+`cfg._render_definition` bound the trace address as `a`, **shadowing** a parameter named `a` (all
+`ap_*`) — `s R_A0 = a` silently meant "= the address", a type-checking-but-wrong invariant no
+discharge could close; fixed to a fresh `pc`. (2) `_splice_skeleton` now accepts a superset of the
+required arms (drops a spurious model-added pass-through arm). Search loops (Tier C) still need the
+Phase-2 decidability case-split; `ap_sum_u8` fails on synthesis compliance only. See `RESULTS.md`.
 
 ## Phase 2 — array-search decidability as a TEMPLATE (find_in_array)
 
